@@ -9,7 +9,7 @@ Local-first with Google Sheets cloud sync.
 1. Press `Ctrl+Shift+Q` (or your MX Master button)
 2. Capture popup appears with screenshot preview
 3. Type a quick note and hit Enter
-4. Gemini 2.0 Flash analyzes the screenshot + note (vision)
+4. Gemini 2.5 Flash analyzes the screenshot + note (vision)
 5. Auto-categorized, tagged, and saved locally + synced to Google Sheets
 6. Browse, search, and manage clips in the main window
 
@@ -73,7 +73,7 @@ npm start
 quickclip/
 ├── src/
 │   ├── main.js          # Electron main process — tray, hotkey, IPC, Sheets sync
-│   ├── ai.js            # Gemini 2.0 Flash API (vision + text)
+│   ├── ai.js            # Gemini 2.5 Flash API (vision + text)
 │   ├── sheets.js        # Google Sheets background sync
 │   └── preload.js       # Context bridge for renderer
 ├── renderer/

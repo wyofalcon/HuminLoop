@@ -39,7 +39,7 @@ const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAA
 
 // ── State ──
 
-const store = new Store({ name: 'quickclip-data' });
+const store = new Store({ name: 'sciurus-data' });
 let tray = null;
 let mainWindow = null;
 let captureWindow = null;
@@ -85,7 +85,7 @@ function sanitizeUpdates(updates) {
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 960, height: 700, show: false,
-    title: 'QuickClip',
+    title: 'Sciurus',
     backgroundColor: '#13131f',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -144,9 +144,9 @@ function startClipboardWatcher() {
 function createTray() {
   const icon = nativeImage.createFromDataURL(FALLBACK_TRAY_ICON);
   tray = new Tray(icon);
-  tray.setToolTip('QuickClip');
+  tray.setToolTip('Sciurus');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open QuickClip', click: () => { mainWindow.show(); mainWindow.focus(); } },
+    { label: 'Open Sciurus', click: () => { mainWindow.show(); mainWindow.focus(); } },
     { label: 'Quick Capture', click: () => createCaptureWindow(null) },
     { type: 'separator' },
     { label: 'Pause Watcher', type: 'checkbox', checked: false, click: (item) => {
@@ -168,7 +168,7 @@ async function syncCategories() {
   const local = store.get('categories', DEFAULT_CATEGORIES);
   const merged = [...new Set([...local, ...sheetCats])];
   store.set('categories', merged);
-  console.log(`[QuickClip] Categories synced: ${merged.length} total`);
+  console.log(`[Sciurus] Categories synced: ${merged.length} total`);
 }
 
 // ── IPC Handlers ──

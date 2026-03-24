@@ -1,8 +1,14 @@
-# QuickClip — AI-Powered Knowledge Capture
+# Sciurus! — AI-Powered Knowledge Capture
 
-Hotkey-triggered screen capture + note-taking tool that uses Gemini AI
-to automatically categorize and organize your knowledge snippets.
-Local-first with Google Sheets cloud sync.
+**Sciurus** (Latin: *squirrel*) — also meaning *shadow* and *tail*.
+
+Built by someone with ADHD who needed a way to stash knowledge mid-task
+without losing the thread. Like a squirrel burying acorns before darting
+to the next tree, Sciurus lets you capture what's on your screen in one
+quick motion — screenshot, note, done — and trust that AI will sort it
+for you later. The shadow-tail meaning fits too: every idea casts a
+shadow you'll want to find again, and this tool is the tail that
+follows your train of thought so you don't have to.
 
 ## How It Works
 
@@ -53,7 +59,7 @@ Drive quota and cannot create new files. Create the sheet manually:
    `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit`
 4. Add to `.env`: `GOOGLE_SHEET_ID=<SHEET_ID>`
 
-### 4. Run QuickClip
+### 4. Run Sciurus
 ```bash
 npm start
 ```
@@ -63,15 +69,15 @@ npm start
 1. Open **Logi Options+** > select MX Master 4
 2. Go to **Buttons** > pick a button (thumb/gesture)
 3. Set action to **Keystroke** > enter `Ctrl+Shift+Q`
-4. Now that button triggers QuickClip!
+4. Now that button triggers Sciurus!
 
 ## Project Structure
 
 ```
-quickclip/
+sciurus/
 ├── src/
 │   ├── main.js          # Electron main process — tray, hotkey, IPC, Sheets sync
-│   ├── ai.js            # Gemini 2.5 Flash API (vision + text)
+│   ├── ai.js            # Gemini 2.5 Flash via Vertex AI (vision + text)
 │   ├── sheets.js        # Google Sheets background sync
 │   └── preload.js       # Context bridge for renderer
 ├── renderer/

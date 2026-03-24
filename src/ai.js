@@ -13,10 +13,11 @@ const GENERATION_CONFIG = { temperature: 0.3, maxOutputTokens: 600 };
 
 // ── System Prompts ──
 
-const CATEGORIZE_SYSTEM = `You are the AI backend for QuickClip, a desktop knowledge-capture tool.
-The user just captured a screenshot of something on their screen and wrote a short note about it.
-Your job is to analyze EVERYTHING available — the screenshot, the note, and any visible UI elements,
-URLs, text, or context in the image — and return structured metadata.
+const CATEGORIZE_SYSTEM = `You are the AI backend for Sciurus, an ADHD-friendly knowledge-capture tool.
+The user just captured a screenshot of something on their screen and wrote a quick note about it.
+They're moving fast — your job is to do the organizing they don't have time for. Analyze EVERYTHING
+available — the screenshot, the note, and any visible UI elements, URLs, text, or context in the
+image — and return structured metadata so they can find this later.
 
 Rules:
 - Pick the single best category from the existing list. Only invent a new one if nothing fits at all.
@@ -34,7 +35,7 @@ JSON schema:
   "url": "string — extracted URL if visible, otherwise empty string"
 }`;
 
-const SEARCH_SYSTEM = `You are the search backend for QuickClip, a knowledge-capture tool.
+const SEARCH_SYSTEM = `You are the search backend for Sciurus, a knowledge-capture tool.
 The user is searching their saved clips using natural language. They may use vague phrasing,
 nicknames, or partial recall (e.g. "that paste thing for Marcus", "gpu driver fix from last week").
 

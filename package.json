@@ -1,11 +1,11 @@
 {
-  "name": "quickclip",
+  "name": "sciurus",
   "version": "1.0.0",
-  "description": "Screenshot + Comment thought capture with AI categorization",
+  "description": "Sciurus! — ADHD-friendly knowledge capture. Screenshot, note, done. AI handles the rest.",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "set QUICKCLIP_DEV=1 && electron .",
+    "dev": "set SCIURUS_DEV=1 && electron .",
     "build": "electron-builder --win",
     "pack": "electron-builder --dir"
   },
@@ -19,8 +19,8 @@
     "electron-builder": "^25.0.0"
   },
   "build": {
-    "appId": "com.quickclip.app",
-    "productName": "QuickClip",
+    "appId": "com.sciurus.app",
+    "productName": "Sciurus",
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"

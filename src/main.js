@@ -239,6 +239,12 @@ ipcMain.on('open-capture', () => {
   createCaptureWindow(getClipboardImageURL());
 });
 
+// ── Auto-launch on login ──
+
+if (app.isPackaged) {
+  app.setLoginItemSettings({ openAtLogin: true, name: 'Sciurus' });
+}
+
 // ── App Lifecycle ──
 
 app.whenReady().then(async () => {

@@ -1,8 +1,9 @@
-// src/ai.js — AI categorization + search via Vertex AI Gemini (billed to GCP)
+// src/ai.js — AI categorization + search via Gemini / Vertex AI
+// Zero heavy dependencies — uses native fetch + crypto for auth
 
 const fs = require('fs');
 const path = require('path');
-const { google } = require('googleapis');
+const crypto = require('crypto');
 
 // ── Constants ──
 
@@ -10,6 +11,8 @@ const MODEL = 'gemini-2.5-flash';
 const LOCATION = 'us-central1';
 const CREDENTIALS_PATH = path.join(__dirname, '..', 'credentials.json');
 const GENERATION_CONFIG = { temperature: 0.3, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } };
+const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 
 // ── System Prompts ──
 
@@ -84,13 +87,55 @@ If nothing matches, return: []`;
 // ── State ──
 
 let authMode = 'none'; // 'apikey' | 'vertex' | 'none'
-let authClient = null;
-let projectId = null;
+let vertexCreds = null; // parsed credentials.json
+let cachedToken = null; // { token, expiresAt }
 let geminiApiKey = null;
+
+// ── Vertex AI JWT Auth (replaces googleapis — saves 196MB) ──
+
+function createJWT(creds) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({
+    iss: creds.client_email,
+    scope: SCOPE,
+    aud: TOKEN_URL,
+    iat: now,
+    exp: now + 3600,
+  })).toString('base64url');
+
+  const sign = crypto.createSign('RSA-SHA256');
+  sign.update(`${header}.${payload}`);
+  const signature = sign.sign(creds.private_key, 'base64url');
+
+  return `${header}.${payload}.${signature}`;
+}
+
+async function getAccessToken() {
+  // Return cached token if still valid (with 60s buffer)
+  if (cachedToken && Date.now() < cachedToken.expiresAt - 60000) {
+    return cachedToken.token;
+  }
+
+  const jwt = createJWT(vertexCreds);
+  const res = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
+  });
+
+  const data = await res.json();
+  if (data.error) throw new Error(`Token exchange failed: ${data.error_description || data.error}`);
+
+  cachedToken = {
+    token: data.access_token,
+    expiresAt: Date.now() + (data.expires_in * 1000),
+  };
+  return cachedToken.token;
+}
 
 // ── Public API ──
 
-/** Initialize AI — supports Gemini API key (simple) or Vertex AI service account (advanced). */
 function init() {
   const mode = process.env.AI_AUTH_MODE || 'auto';
 
@@ -105,18 +150,13 @@ function init() {
     }
   }
 
-  // Try Vertex AI (service account)
+  // Try Vertex AI (service account — lightweight JWT auth)
   if (mode === 'vertex' || mode === 'auto') {
     if (fs.existsSync(CREDENTIALS_PATH)) {
       try {
-        const creds = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
-        projectId = creds.project_id;
-        authClient = new google.auth.GoogleAuth({
-          keyFile: CREDENTIALS_PATH,
-          scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-        });
+        vertexCreds = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
         authMode = 'vertex';
-        console.log(`[AI] Vertex AI ready (project: ${projectId}, model: ${MODEL})`);
+        console.log(`[AI] Vertex AI ready (project: ${vertexCreds.project_id}, model: ${MODEL})`);
         return true;
       } catch (e) {
         console.error('[AI] Vertex AI init failed:', e.message);
@@ -129,18 +169,10 @@ function init() {
   return false;
 }
 
-/** Returns true if any AI auth is configured and ready. */
 function isEnabled() {
   return authMode !== 'none';
 }
 
-/**
- * Categorize a clip using Gemini vision. Returns structured metadata or null.
- * @param {string} comment - User's note
- * @param {string[]} categories - Existing category names
- * @param {string|null} imageDataURL - Screenshot as data URL
- * @param {Array|null} projects - Array of {id, name, description, repo_path} for project matching
- */
 async function categorize(comment, categories, imageDataURL = null, projects = null, windowMeta = null) {
   let userText = `Existing categories: ${JSON.stringify(categories)}\n\n`;
 
@@ -172,12 +204,10 @@ async function categorize(comment, categories, imageDataURL = null, projects = n
   try {
     const result = await callGemini(CATEGORIZE_SYSTEM, parts);
     if (!result) return null;
-    // Ensure expected fields exist
     if (!result.category) result.category = 'Uncategorized';
     if (!Array.isArray(result.tags)) result.tags = [];
     if (!result.summary) result.summary = comment;
     if (!result.url) result.url = '';
-    // Normalize project_id
     if (result.project_id !== undefined && result.project_id !== null) {
       result.project_id = parseInt(result.project_id, 10);
       if (isNaN(result.project_id)) result.project_id = null;
@@ -191,7 +221,6 @@ async function categorize(comment, categories, imageDataURL = null, projects = n
   }
 }
 
-/** Search clips by natural-language query. Returns an array of matching IDs or null. */
 async function search(query, clips) {
   const clipList = clips
     .map((c) => {
@@ -217,20 +246,17 @@ async function search(query, clips) {
 
 // ── Internal ──
 
-/** Send a request to Gemini and parse the JSON response. Supports both API key and Vertex AI. */
 async function callGemini(systemInstruction, parts) {
   if (!isEnabled()) return null;
 
   let url, headers;
 
   if (authMode === 'apikey') {
-    // Google AI Studio / Gemini API (simple key auth)
     url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${geminiApiKey}`;
     headers = { 'Content-Type': 'application/json' };
   } else {
-    // Vertex AI (service account auth)
-    const token = await authClient.getAccessToken();
-    url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}`
+    const token = await getAccessToken();
+    url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${vertexCreds.project_id}`
       + `/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
     headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
   }

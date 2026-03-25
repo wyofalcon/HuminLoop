@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('quickclip', {
   saveClip: (clip) => ipcRenderer.invoke('save-clip', clip),
   updateClip: (id, updates) => ipcRenderer.invoke('update-clip', id, updates),
   deleteClip: (id) => ipcRenderer.invoke('delete-clip', id),
+  getClipImage: (clipId) => ipcRenderer.invoke('get-clip-image', clipId),
   assignClipToProject: (clipId, projectId) => ipcRenderer.invoke('assign-clip-to-project', clipId, projectId),
 
   // Categories

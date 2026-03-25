@@ -10,6 +10,7 @@ const db = require('./db');
 const ai = require('./ai');
 const rules = require('./rules');
 const { getActiveWindow } = require('./window-info');
+const images = require('./images');
 
 // ── .env loader (manual — dotenv v17 changed its API) ──
 
@@ -23,6 +24,9 @@ if (fs.existsSync(ENV_PATH)) {
   }
 }
 
+// ── Remove default Electron menu (links to Electron repo) ──
+Menu.setApplicationMenu(null);
+
 // ── Single Instance Lock ──
 // When clicking the desktop icon again, focus the existing window instead of launching a second instance
 
@@ -35,7 +39,7 @@ if (app) {
 
 // ── Constants ──
 
-const CLIPBOARD_POLL_MS = 500;
+const CLIPBOARD_POLL_MS = 1000;
 const DEFAULT_CATEGORIES = [
   'Uncategorized', 'cvstomize.com', 'PowerToys', 'LLM Setup',
   'Hardware/GPU', 'Ideas', 'Code Patterns',
@@ -256,7 +260,9 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
   try {
     const cats = await db.getCategories();
     const projects = await db.getProjects();
-    const result = await ai.categorize(comment, cats, imageData, projects, { windowTitle, processName });
+    // Compress image before sending to AI — 60-70% smaller payload
+    const compressedImage = imageData ? images.compressForAI(imageData) : null;
+    const result = await ai.categorize(comment, cats, compressedImage, projects, { windowTitle, processName });
     if (!result) return;
 
     const updates = {};
@@ -302,6 +308,13 @@ ipcMain.handle('get-clips-for-project', (_, projectId) => db.getClips(projectId)
 ipcMain.handle('save-clip', async (_, clip) => {
   if (!clip || typeof clip.id !== 'string') return false;
 
+  // Save image to disk, store flag in DB instead of full base64
+  const imageData = clip.image;
+  if (imageData) {
+    images.saveImage(clip.id, imageData);
+    clip.image = '__on_disk__';
+  }
+
   // Rule-based categorization (before saving — so the clip gets correct initial values)
   if (clip.category === 'Uncategorized' || !clip.project_id) {
     const ruleResult = await rules.categorize(clip.window_title, clip.process_name);
@@ -321,9 +334,14 @@ ipcMain.handle('save-clip', async (_, clip) => {
   // AI categorization as fallback — only if still uncategorized after rules
   if (clip.category === 'Uncategorized' && clip.comment && ai.isEnabled()) {
     console.log(`[Sciurus] Starting AI categorization for: "${clip.comment.slice(0, 30)}"`);
-    autoCategorize(clip.id, clip.comment, clip.image, clip.window_title, clip.process_name);
+    autoCategorize(clip.id, clip.comment, imageData, clip.window_title, clip.process_name);
   }
   return true;
+});
+
+// Load image on demand from disk
+ipcMain.handle('get-clip-image', (_, clipId) => {
+  return images.loadImage(clipId);
 });
 
 ipcMain.handle('update-clip', async (_, id, updates) => {
@@ -336,6 +354,7 @@ ipcMain.handle('update-clip', async (_, id, updates) => {
 
 ipcMain.handle('delete-clip', async (_, id) => {
   if (typeof id !== 'string') return false;
+  images.deleteImage(id);
   await db.deleteClip(id);
   notifyMainWindow('clips-changed');
   return true;
@@ -364,18 +383,21 @@ ipcMain.handle('get-project', (_, id) => db.getProject(id));
 
 ipcMain.handle('create-project', async (_, data) => {
   const project = await db.createProject(data);
+  rules.invalidateCache();
   notifyMainWindow('projects-changed');
   return project;
 });
 
 ipcMain.handle('update-project', async (_, id, data) => {
   const project = await db.updateProject(id, data);
+  rules.invalidateCache();
   notifyMainWindow('projects-changed');
   return project;
 });
 
 ipcMain.handle('delete-project', async (_, id) => {
   await db.deleteProject(id);
+  rules.invalidateCache();
   notifyMainWindow('projects-changed');
   notifyMainWindow('clips-changed');
   return true;

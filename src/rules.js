@@ -1,18 +1,33 @@
 // src/rules.js — Rule-based categorization engine
 // Priority chain: user selection > repo_path auto-match > window rules > AI fallback
+// Caches rules and projects in memory with 5-minute TTL to avoid DB hits on every save.
 
 const db = require('./db');
 
-/**
- * Auto-match a project by checking if the window title contains a known repo folder name.
- * Leverages the existing projects.repo_path column — no manual rules needed.
- *
- * @param {string|null} windowTitle
- * @returns {Promise<number|null>} project ID or null
- */
+// ── Cache ──
+
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+let cache = { projects: null, rules: null, timestamp: 0 };
+
+async function getCached() {
+  if (Date.now() - cache.timestamp > CACHE_TTL || !cache.projects) {
+    cache.projects = await db.getProjects();
+    cache.rules = await db.getWindowRules();
+    cache.timestamp = Date.now();
+  }
+  return cache;
+}
+
+/** Call this when projects or rules change to force a refresh. */
+function invalidateCache() {
+  cache.timestamp = 0;
+}
+
+// ── Matching ──
+
 async function autoMatchProject(windowTitle) {
   if (!windowTitle) return null;
-  const projects = await db.getProjects();
+  const { projects } = await getCached();
   const titleLower = windowTitle.toLowerCase().replace(/\\/g, '/');
 
   for (const p of projects) {
@@ -24,16 +39,8 @@ async function autoMatchProject(windowTitle) {
   return null;
 }
 
-/**
- * Evaluate window_rules table against captured metadata.
- * Rules are evaluated in priority order (highest first). First match wins per field.
- *
- * @param {string|null} windowTitle
- * @param {string|null} processName
- * @returns {Promise<{ categoryId: number|null, projectId: number|null }>}
- */
 async function evaluateRules(windowTitle, processName) {
-  const rules = await db.getWindowRules();
+  const { rules } = await getCached();
   let categoryId = null;
   let projectId = null;
 
@@ -57,29 +64,17 @@ async function evaluateRules(windowTitle, processName) {
     if (matched) {
       if (!categoryId && rule.category_id) categoryId = rule.category_id;
       if (!projectId && rule.project_id) projectId = rule.project_id;
-      if (categoryId && projectId) break; // both assigned, done
+      if (categoryId && projectId) break;
     }
   }
 
   return { categoryId, projectId };
 }
 
-/**
- * Run the full rule-based categorization pipeline.
- * Returns suggested category name and project ID (either may be null).
- *
- * @param {string|null} windowTitle
- * @param {string|null} processName
- * @returns {Promise<{ category: string|null, projectId: number|null }>}
- */
 async function categorize(windowTitle, processName) {
-  // 1. Auto-match project from repo_path
   const autoProject = await autoMatchProject(windowTitle);
-
-  // 2. Evaluate explicit window rules
   const ruleResult = await evaluateRules(windowTitle, processName);
 
-  // Resolve category name from ID if rules matched
   let category = null;
   if (ruleResult.categoryId) {
     category = await db.getCategoryName(ruleResult.categoryId);
@@ -91,4 +86,4 @@ async function categorize(windowTitle, processName) {
   };
 }
 
-module.exports = { categorize, autoMatchProject, evaluateRules };
+module.exports = { categorize, autoMatchProject, evaluateRules, invalidateCache };

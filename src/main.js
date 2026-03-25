@@ -472,11 +472,18 @@ ipcMain.handle('setup-check-db', async () => {
 });
 
 ipcMain.handle('setup-start-db', async () => {
+  // Detect docker compose v2 (docker compose) vs v1 (docker-compose)
+  let composeCmd = 'docker-compose';
+  try {
+    execSync('docker compose version', { encoding: 'utf8', timeout: 5000 });
+    composeCmd = 'docker compose';
+  } catch {}
+
   return new Promise((resolve) => {
     const composeFile = path.join(__dirname, '..', 'docker-compose.yml');
-    exec(`docker-compose -f "${composeFile}" up -d`, { timeout: 120000 }, (err, stdout, stderr) => {
+    exec(`${composeCmd} -f "${composeFile}" up -d`, { timeout: 120000 }, (err, stdout, stderr) => {
       if (err) {
-        console.error('[Setup] docker-compose failed:', stderr);
+        console.error('[Setup] docker compose failed:', stderr);
         resolve({ ok: false, error: stderr.split('\n')[0] || err.message });
       } else {
         // Wait a moment for the health check
@@ -574,7 +581,7 @@ ipcMain.handle('setup-finish', async () => {
 
 // ── Auto-launch on login ──
 
-if (app.isPackaged) {
+if (app.isPackaged && process.platform === 'win32') {
   app.setLoginItemSettings({ openAtLogin: true, name: 'Sciurus' });
 }
 
@@ -590,7 +597,7 @@ async function launchMainApp() {
   if (!dbReady) {
     dialog.showErrorBox(
       'Sciurus — Database Error',
-      'Could not initialize any database backend.\n\nEither:\n  • Start Docker: docker-compose up -d\n  • Or install better-sqlite3: npm install\n\nThen restart Sciurus.'
+      'Could not initialize any database backend.\n\nEither:\n  • Start Docker: docker compose up -d\n  • Or install better-sqlite3: npm install\n\nThen restart Sciurus.'
     );
     isQuitting = true;
     app.quit();

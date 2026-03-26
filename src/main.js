@@ -317,7 +317,7 @@ ipcMain.handle('save-clip', async (_, clip) => {
 
   // Rule-based categorization (before saving — so the clip gets correct initial values)
   if (clip.category === 'Uncategorized' || !clip.project_id) {
-    const ruleResult = await rules.categorize(clip.window_title, clip.process_name);
+    const ruleResult = await rules.categorize(clip.window_title, clip.process_name, clip.comment);
     if (clip.category === 'Uncategorized' && ruleResult.category) {
       clip.category = ruleResult.category;
       console.log(`[Sciurus] Rules matched category: ${ruleResult.category}`);

@@ -16,23 +16,31 @@ const SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 
 // ── System Prompts ──
 
-let customCategorizePrompt = null; // loaded from DB settings at runtime
+// Prompt is composed from toggleable instruction blocks.
+// Core role + JSON output are always included. Everything else is toggleable.
 
-const DEFAULT_CATEGORIZE_SYSTEM = `You are the AI backend for Sciurus, an ADHD-friendly knowledge-capture tool.
-The user just captured a screenshot of something on their screen and wrote a quick note about it.
-They're moving fast — your job is to do the organizing they don't have time for. Analyze EVERYTHING
-available — the screenshot, the note, and any visible UI elements, URLs, text, or context in the
-image — and return structured metadata so they can find this later.
-
-Rules for CATEGORY:
+const PROMPT_BLOCKS = [
+  {
+    id: 'category',
+    label: 'Category assignment',
+    desc: 'Pick the best category from existing list or create new broad ones',
+    locked: false,
+    default: true,
+    text: `Rules for CATEGORY:
 - Pick the single best category from the existing list. Only invent a new one if nothing fits at all.
   New categories should be broad and reusable (e.g. "Networking", not "That One VPN Thing").
 - Consider the full context: what app is visible, what topic the note describes, what kind of
   problem or task this relates to, and any text visible in the screenshot.
 - If the screenshot shows code, a terminal, or a dev tool — look at what project/repo/file is
-  visible and match it to the best category.
-
-Rules for PROJECT:
+  visible and match it to the best category.`,
+  },
+  {
+    id: 'project',
+    label: 'Project matching',
+    desc: 'Match clips to projects by repo path, window title, or topic alignment',
+    locked: false,
+    default: true,
+    text: `Rules for PROJECT:
 - You may also receive a list of projects. Each project has a name, description, and optionally
   a local repo path.
 - If the screenshot or note clearly relates to one of these projects, include its ID in your response.
@@ -40,30 +48,63 @@ Rules for PROJECT:
   or tab titles, topic alignment between the note and the project description, or any other clue.
 - If no project matches, return null for project_id. Do NOT force a match.
 - Repo path matching: if the screenshot shows a path like "C:\\Users\\...\\projects\\cvstomize"
-  and a project has repo_path "C:\\Users\\...\\projects\\cvstomize", that's a strong match.
-
-Rules for TAGS:
+  and a project has repo_path "C:\\Users\\...\\projects\\cvstomize", that's a strong match.`,
+  },
+  {
+    id: 'tags',
+    label: 'Tag generation',
+    desc: 'Generate 2-5 searchable tags from screenshot content',
+    locked: false,
+    default: true,
+    text: `Rules for TAGS:
 - Tags should be specific, lowercase, and useful for search (e.g. "powertoys", "clipboard", "ai").
 - Include the project name as a tag if you assign a project.
-- Include technology names, tool names, and key concepts visible in the screenshot.
-
-Rules for SUMMARY:
+- Include technology names, tool names, and key concepts visible in the screenshot.`,
+  },
+  {
+    id: 'summary',
+    label: 'Summary generation',
+    desc: 'Write a 1-2 sentence summary of why the clip matters',
+    locked: false,
+    default: true,
+    text: `Rules for SUMMARY:
 - The summary should capture WHY this is worth saving, not just describe the screenshot.
-- Be specific — mention the tool, feature, error, or concept. 1-2 sentences max.
-
-Rules for MARKUP COLORS:
+- Be specific — mention the tool, feature, error, or concept. 1-2 sentences max.`,
+  },
+  {
+    id: 'markup',
+    label: 'Markup color detection',
+    desc: 'Red = bug, Green = approved, Pink = question — read annotation colors as intent',
+    locked: false,
+    default: true,
+    text: `Rules for MARKUP COLORS:
 - The user annotates screenshots with colored markers before capturing. The colors have meaning:
   - RED marker = bug, error, or problem that needs fixing
   - GREEN marker = working correctly, approved, or "keep this"
   - PINK marker = question, needs discussion, or "ask about this"
 - If you see colored markup/annotations on the screenshot, factor the color meaning into your
   category, tags, and summary. For example, red markup on a stack trace → tag with "bug".
-- Include a "markup" tag (e.g. "markup-red", "markup-green", "markup-pink") if annotations are visible.
+- Include a "markup" tag (e.g. "markup-red", "markup-green", "markup-pink") if annotations are visible.`,
+  },
+  {
+    id: 'url',
+    label: 'URL extraction',
+    desc: 'Extract visible URLs from the screenshot',
+    locked: false,
+    default: true,
+    text: `Rules for URL:
+- If you can see a URL in the screenshot or infer one from the content, include it.`,
+  },
+];
 
-Rules for URL:
-- If you can see a URL in the screenshot or infer one from the content, include it.
+// These are always included regardless of toggles
+const CORE_INTRO = `You are the AI backend for Sciurus, an ADHD-friendly knowledge-capture tool.
+The user just captured a screenshot of something on their screen and wrote a quick note about it.
+They're moving fast — your job is to do the organizing they don't have time for. Analyze EVERYTHING
+available — the screenshot, the note, and any visible UI elements, URLs, text, or context in the
+image — and return structured metadata so they can find this later.`;
 
-Return ONLY valid JSON. No markdown fences, no explanation, no extra text.
+const CORE_OUTPUT = `Return ONLY valid JSON. No markdown fences, no explanation, no extra text.
 
 JSON schema:
 {
@@ -73,6 +114,10 @@ JSON schema:
   "summary": "string — 1-2 sentences on what this is and why it matters",
   "url": "string — extracted URL if visible, otherwise empty string"
 }`;
+
+// State: which blocks are enabled (loaded from DB, defaults to all on)
+let enabledBlocks = null; // { category: true, project: true, ... }
+let customBlocks = []; // user-added custom instruction blocks
 
 const SEARCH_SYSTEM = `You are the search backend for Sciurus, a knowledge-capture tool.
 The user is searching their saved clips using natural language. They may use vague phrasing,
@@ -283,24 +328,64 @@ async function callGemini(systemInstruction, parts) {
   return JSON.parse(clean);
 }
 
-// ── Prompt Management ──
+// ── Prompt Composition ──
 
+/** Build the full prompt from enabled blocks. */
 function getCategorizePrompt() {
-  return customCategorizePrompt || DEFAULT_CATEGORIZE_SYSTEM;
+  const enabled = enabledBlocks || getDefaultEnabledBlocks();
+  const parts = [CORE_INTRO, ''];
+
+  for (const block of PROMPT_BLOCKS) {
+    if (enabled[block.id]) parts.push(block.text, '');
+  }
+
+  // Append any custom user blocks
+  for (const cb of customBlocks) {
+    if (cb.enabled) parts.push(cb.text, '');
+  }
+
+  parts.push(CORE_OUTPUT);
+  return parts.join('\n');
 }
 
-function setCategorizePrompt(prompt) {
-  customCategorizePrompt = prompt && prompt.trim() ? prompt.trim() : null;
+function getDefaultEnabledBlocks() {
+  const defaults = {};
+  for (const b of PROMPT_BLOCKS) defaults[b.id] = b.default;
+  return defaults;
 }
 
-function getDefaultCategorizePrompt() {
-  return DEFAULT_CATEGORIZE_SYSTEM;
+/** Get the block definitions + their enabled state for the UI. */
+function getPromptBlocks() {
+  const enabled = enabledBlocks || getDefaultEnabledBlocks();
+  return {
+    blocks: PROMPT_BLOCKS.map(b => ({
+      id: b.id, label: b.label, desc: b.desc, locked: b.locked,
+      enabled: enabled[b.id] !== false,
+      tokens: estimateTokens(b.text),
+    })),
+    custom: customBlocks.map(cb => ({
+      id: cb.id, label: cb.label, text: cb.text,
+      enabled: cb.enabled,
+      tokens: estimateTokens(cb.text),
+    })),
+    coreTokens: estimateTokens(CORE_INTRO) + estimateTokens(CORE_OUTPUT),
+    totalTokens: estimateTokens(getCategorizePrompt()),
+  };
 }
 
-/**
- * Rough token estimate — ~4 chars per token for English text.
- * Not exact but gives users a useful ballpark.
- */
+/** Update which blocks are enabled. */
+function setPromptBlocks(enabled, custom) {
+  enabledBlocks = enabled || getDefaultEnabledBlocks();
+  customBlocks = custom || [];
+}
+
+/** Reset all blocks to defaults. */
+function resetPromptBlocks() {
+  enabledBlocks = getDefaultEnabledBlocks();
+  customBlocks = [];
+}
+
+/** Rough token estimate — ~4 chars per token for English text. */
 function estimateTokens(text) {
   if (!text) return 0;
   return Math.ceil(text.length / 4);
@@ -308,5 +393,5 @@ function estimateTokens(text) {
 
 module.exports = {
   init, isEnabled, categorize, search,
-  getCategorizePrompt, setCategorizePrompt, getDefaultCategorizePrompt, estimateTokens,
+  getCategorizePrompt, getPromptBlocks, setPromptBlocks, resetPromptBlocks, estimateTokens,
 };

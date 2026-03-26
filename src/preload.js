@@ -36,11 +36,10 @@ contextBridge.exposeInMainWorld('quickclip', {
   aiCategorize: (comment, imageData) => ipcRenderer.invoke('ai-categorize', comment, imageData),
   aiSearch: (query) => ipcRenderer.invoke('ai-search', query),
   hasApiKey: () => ipcRenderer.invoke('has-api-key'),
-  getAiPrompt: () => ipcRenderer.invoke('get-ai-prompt'),
-  getDefaultAiPrompt: () => ipcRenderer.invoke('get-default-ai-prompt'),
-  saveAiPrompt: (prompt) => ipcRenderer.invoke('save-ai-prompt', prompt),
-  resetAiPrompt: () => ipcRenderer.invoke('reset-ai-prompt'),
-  estimateTokens: (text) => ipcRenderer.invoke('estimate-tokens', text),
+  getPromptBlocks: () => ipcRenderer.invoke('get-prompt-blocks'),
+  savePromptBlocks: (enabled, custom) => ipcRenderer.invoke('save-prompt-blocks', enabled, custom),
+  resetPromptBlocks: () => ipcRenderer.invoke('reset-prompt-blocks'),
+  addCustomBlock: (label, text) => ipcRenderer.invoke('add-custom-block', label, text),
 
   // App info
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),

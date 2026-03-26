@@ -337,7 +337,7 @@ function renderContent() {
   const el = document.getElementById('mainArea');
   if (activeTab === 'general') renderGeneralContent(el);
   else if (activeTab === 'projects') renderProjectsContent(el);
-  else if (activeTab === 'settings') { renderSettingsContent(el); loadAiPrompt(); }
+  else if (activeTab === 'settings') { renderSettingsContent(el); loadPromptBlocks(); }
   else if (activeTab === 'help') renderHelpContent(el);
 }
 
@@ -797,21 +797,26 @@ function renderSettingsContent(el) {
       </div>
 
       <div class="settings-section">
-        <h3>AI Prompt Editor</h3>
-        <p class="setting-desc" style="margin-bottom:8px">
-          Customize how the AI categorizes your clips. This is the system prompt sent with every categorization request.
-        </p>
-        <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:8px">
-          <textarea id="aiPromptEditor" class="setting-textarea" rows="12"
-            oninput="updateTokenCount()"
-            placeholder="Loading prompt..."></textarea>
+        <h3>AI Instructions</h3>
+        <p class="setting-desc">Toggle which instructions the AI follows when categorizing. Disabling blocks reduces token usage and API cost.</p>
+        <div id="promptBlockList" class="prompt-block-list">Loading...</div>
+        <div id="customBlockList" class="prompt-block-list"></div>
+        <div class="prompt-footer">
           <div class="prompt-meta">
             <span id="tokenCount" class="token-count">~ 0 tokens</span>
-            <span id="tokenDiff" class="token-diff"></span>
-            <div class="prompt-actions">
-              <button type="button" class="btn-sm secondary" onclick="resetAiPrompt()">Reset to Default</button>
-              <button type="button" class="btn-sm primary" onclick="saveAiPrompt()">Save Prompt</button>
-            </div>
+            <span class="token-hint">per categorization request</span>
+          </div>
+          <div class="prompt-actions">
+            <button type="button" class="btn-sm secondary" onclick="showAddCustomBlock()">+ Custom Rule</button>
+            <button type="button" class="btn-sm secondary" onclick="resetPromptBlocks()">Reset All</button>
+          </div>
+        </div>
+        <div id="customBlockForm" class="custom-block-form hidden">
+          <input id="customBlockLabel" class="setting-input" placeholder="Rule name (e.g. &quot;Ignore browser tabs&quot;)" />
+          <textarea id="customBlockText" class="setting-textarea" rows="3" placeholder="Instruction text for the AI..."></textarea>
+          <div class="prompt-actions">
+            <button type="button" class="btn-sm secondary" onclick="hideCustomBlockForm()">Cancel</button>
+            <button type="button" class="btn-sm primary" onclick="addCustomBlock()">Add Rule</button>
           </div>
         </div>
       </div>
@@ -851,57 +856,111 @@ async function updateSetting(section, key, value) {
   await window.quickclip.saveSetting(section, current);
 }
 
-// ── AI Prompt Editor ──
+// ── AI Prompt Blocks ──
 
-let defaultTokenCount = 0;
+let promptData = null;
 
-async function loadAiPrompt() {
-  const editor = document.getElementById('aiPromptEditor');
-  if (!editor) return;
-  const prompt = await window.quickclip.getAiPrompt();
-  editor.value = prompt;
-  const defaultPrompt = await window.quickclip.getDefaultAiPrompt();
-  defaultTokenCount = await window.quickclip.estimateTokens(defaultPrompt);
-  updateTokenCount();
+async function loadPromptBlocks() {
+  const el = document.getElementById('promptBlockList');
+  if (!el) return;
+  promptData = await window.quickclip.getPromptBlocks();
+  renderPromptBlocks();
 }
 
-async function updateTokenCount() {
-  const editor = document.getElementById('aiPromptEditor');
-  const countEl = document.getElementById('tokenCount');
-  const diffEl = document.getElementById('tokenDiff');
-  if (!editor || !countEl) return;
+function renderPromptBlocks() {
+  if (!promptData) return;
+  const el = document.getElementById('promptBlockList');
+  const customEl = document.getElementById('customBlockList');
+  const tokenEl = document.getElementById('tokenCount');
 
-  const tokens = await window.quickclip.estimateTokens(editor.value);
-  countEl.textContent = `~ ${tokens.toLocaleString()} tokens`;
+  // Built-in blocks
+  el.innerHTML = promptData.blocks.map(b => `
+    <div class="prompt-block ${b.enabled ? '' : 'disabled'}">
+      <label class="toggle">
+        <input type="checkbox" ${b.enabled ? 'checked' : ''} onchange="toggleBlock('${b.id}', this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+      <div class="prompt-block-info">
+        <div class="prompt-block-label">${esc(b.label)}</div>
+        <div class="prompt-block-desc">${esc(b.desc)}</div>
+      </div>
+      <span class="prompt-block-tokens">~${b.tokens} tok</span>
+    </div>
+  `).join('');
 
-  if (diffEl && defaultTokenCount > 0) {
-    const diff = tokens - defaultTokenCount;
-    if (diff > 0) {
-      diffEl.textContent = `(+${diff} vs default — higher API cost)`;
-      diffEl.className = 'token-diff warn';
-    } else if (diff < 0) {
-      diffEl.textContent = `(${diff} vs default — lower API cost)`;
-      diffEl.className = 'token-diff ok';
-    } else {
-      diffEl.textContent = '(same as default)';
-      diffEl.className = 'token-diff';
-    }
+  // Custom blocks
+  if (promptData.custom.length > 0) {
+    customEl.innerHTML = '<div class="prompt-block-divider">Custom Rules</div>' +
+      promptData.custom.map(cb => `
+        <div class="prompt-block ${cb.enabled ? '' : 'disabled'}">
+          <label class="toggle">
+            <input type="checkbox" ${cb.enabled ? 'checked' : ''} onchange="toggleCustomBlock('${cb.id}', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+          <div class="prompt-block-info">
+            <div class="prompt-block-label">${esc(cb.label)}</div>
+            <div class="prompt-block-desc">${esc(cb.text.slice(0, 80))}${cb.text.length > 80 ? '...' : ''}</div>
+          </div>
+          <span class="prompt-block-tokens">~${cb.tokens} tok</span>
+          <button type="button" class="prompt-block-delete" onclick="deleteCustomBlock('${cb.id}')" title="Remove">x</button>
+        </div>
+      `).join('');
+  } else {
+    customEl.innerHTML = '';
   }
+
+  if (tokenEl) tokenEl.textContent = `~ ${promptData.totalTokens.toLocaleString()} tokens`;
 }
 
-async function saveAiPrompt() {
-  const editor = document.getElementById('aiPromptEditor');
-  if (!editor) return;
-  await window.quickclip.saveAiPrompt(editor.value);
-  const btn = document.querySelector('.prompt-actions .primary');
-  if (btn) { btn.textContent = 'Saved!'; setTimeout(() => { btn.textContent = 'Save Prompt'; }, 1500); }
+async function toggleBlock(id, enabled) {
+  const enabledMap = {};
+  for (const b of promptData.blocks) enabledMap[b.id] = b.id === id ? enabled : b.enabled;
+  const custom = promptData.custom.map(c => ({ id: c.id, label: c.label, text: c.text, enabled: c.enabled }));
+  promptData = await window.quickclip.savePromptBlocks(enabledMap, custom);
+  renderPromptBlocks();
 }
 
-async function resetAiPrompt() {
-  const prompt = await window.quickclip.resetAiPrompt();
-  const editor = document.getElementById('aiPromptEditor');
-  if (editor) editor.value = prompt;
-  updateTokenCount();
+async function toggleCustomBlock(id, enabled) {
+  const enabledMap = {};
+  for (const b of promptData.blocks) enabledMap[b.id] = b.enabled;
+  const custom = promptData.custom.map(c => ({
+    id: c.id, label: c.label, text: c.text, enabled: c.id === id ? enabled : c.enabled,
+  }));
+  promptData = await window.quickclip.savePromptBlocks(enabledMap, custom);
+  renderPromptBlocks();
+}
+
+async function deleteCustomBlock(id) {
+  const enabledMap = {};
+  for (const b of promptData.blocks) enabledMap[b.id] = b.enabled;
+  const custom = promptData.custom.filter(c => c.id !== id).map(c => ({ id: c.id, label: c.label, text: c.text, enabled: c.enabled }));
+  promptData = await window.quickclip.savePromptBlocks(enabledMap, custom);
+  renderPromptBlocks();
+}
+
+async function resetPromptBlocks() {
+  promptData = await window.quickclip.resetPromptBlocks();
+  renderPromptBlocks();
+}
+
+function showAddCustomBlock() {
+  document.getElementById('customBlockForm').classList.remove('hidden');
+  document.getElementById('customBlockLabel').focus();
+}
+
+function hideCustomBlockForm() {
+  document.getElementById('customBlockForm').classList.add('hidden');
+  document.getElementById('customBlockLabel').value = '';
+  document.getElementById('customBlockText').value = '';
+}
+
+async function addCustomBlock() {
+  const label = document.getElementById('customBlockLabel').value.trim();
+  const text = document.getElementById('customBlockText').value.trim();
+  if (!label || !text) return;
+  promptData = await window.quickclip.addCustomBlock(label, text);
+  hideCustomBlockForm();
+  renderPromptBlocks();
 }
 
 // =====================================================================

@@ -429,21 +429,29 @@ ipcMain.handle('has-api-key', () => ai.isEnabled());
 
 // ── IPC Handlers: AI Prompt ──
 
-ipcMain.handle('get-ai-prompt', () => ai.getCategorizePrompt());
-ipcMain.handle('get-default-ai-prompt', () => ai.getDefaultCategorizePrompt());
-ipcMain.handle('estimate-tokens', (_, text) => ai.estimateTokens(text));
+ipcMain.handle('get-prompt-blocks', () => ai.getPromptBlocks());
 
-ipcMain.handle('save-ai-prompt', async (_, prompt) => {
-  ai.setCategorizePrompt(prompt);
-  // Persist to DB settings
-  await db.saveSetting('ai_prompt', prompt || '');
-  return true;
+ipcMain.handle('save-prompt-blocks', async (_, enabled, custom) => {
+  ai.setPromptBlocks(enabled, custom);
+  await db.saveSetting('prompt_blocks', { enabled, custom });
+  return ai.getPromptBlocks();
 });
 
-ipcMain.handle('reset-ai-prompt', async () => {
-  ai.setCategorizePrompt(null);
-  await db.saveSetting('ai_prompt', '');
-  return ai.getDefaultCategorizePrompt();
+ipcMain.handle('reset-prompt-blocks', async () => {
+  ai.resetPromptBlocks();
+  await db.saveSetting('prompt_blocks', null);
+  return ai.getPromptBlocks();
+});
+
+ipcMain.handle('add-custom-block', async (_, label, text) => {
+  const blocks = ai.getPromptBlocks();
+  const custom = blocks.custom.map(c => ({ id: c.id, label: c.label, text: c.text, enabled: c.enabled }));
+  custom.push({ id: `custom_${Date.now()}`, label, text, enabled: true });
+  const enabled = {};
+  for (const b of blocks.blocks) enabled[b.id] = b.enabled;
+  ai.setPromptBlocks(enabled, custom);
+  await db.saveSetting('prompt_blocks', { enabled, custom });
+  return ai.getPromptBlocks();
 });
 
 ipcMain.handle('get-app-version', () => {
@@ -634,11 +642,11 @@ async function launchMainApp() {
   startClipboardWatcher();
   ai.init();
 
-  // Load custom AI prompt from DB if one was saved
-  const savedPrompt = await db.getSettings('ai_prompt');
-  if (savedPrompt && savedPrompt.trim()) {
-    ai.setCategorizePrompt(savedPrompt);
-    console.log('[Sciurus] Custom AI prompt loaded from settings');
+  // Load saved prompt block config from DB
+  const savedBlocks = await db.getSettings('prompt_blocks');
+  if (savedBlocks && savedBlocks.enabled) {
+    ai.setPromptBlocks(savedBlocks.enabled, savedBlocks.custom || []);
+    console.log('[Sciurus] Custom prompt config loaded from settings');
   }
   retryUncategorized();
 

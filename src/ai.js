@@ -393,12 +393,17 @@ function estimateTokens(text) {
 
 const SUMMARIZE_SYSTEM = `You are the summarization backend for Sciurus, a knowledge-capture tool.
 You receive a list of notes from a single project. Each note has an ID and text written by the user.
-For each note, write a clear, concise 1-2 sentence summary capturing WHY it matters, not just what it says.
-Be specific — mention tools, features, errors, or concepts referenced.
+For each note, generate an actionable AI prompt that another AI (like Copilot or ChatGPT) could use
+to fix, implement, or resolve the issue described in the note. The prompt should:
+- State the problem or task clearly in imperative form (e.g. "Fix the…", "Implement…", "Refactor…")
+- Include relevant technical context: file names, function names, error messages, tools, or libraries mentioned
+- Be specific enough to act on without seeing the original screenshot
+- If the note describes a working solution or reference, frame it as "Apply this pattern: …" or "Use this approach: …"
+- Keep it to 1-3 sentences — concise but complete enough for an AI to start working immediately
 
 Return ONLY a valid JSON array. No markdown fences, no explanation.
-Each element: { "id": "string — the note ID", "summary": "string — your summary" }
-If a note is empty or unintelligible, return a short fallback like "No meaningful content to summarize."`;
+Each element: { "id": "string — the note ID", "summary": "string — the actionable AI prompt" }
+If a note is empty or unintelligible, return a fallback like "Review this note — insufficient context to generate a fix prompt."`;
 
 async function summarizeNotes(notes) {
   if (!isEnabled() || !notes.length) return [];

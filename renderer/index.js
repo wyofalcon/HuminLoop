@@ -644,7 +644,7 @@ function renderSummaryPanel(el, proj, results) {
   html += `<div class="summary-panel">`;
   html += `<div class="summary-row summary-header-row">
     <div class="summary-col-label">Original Note</div>
-    <div class="summary-col-label">AI Summary</div>
+    <div class="summary-col-label">AI Fix Prompt</div>
   </div>`;
 
   withContent.forEach((r) => {
@@ -656,7 +656,7 @@ function renderSummaryPanel(el, proj, results) {
         <div class="summary-note-meta">${catBadge} ${timeAgo(r.timestamp)}</div>
       </div>
       <div class="summary-col summary-ai">
-        ${r.aiSummary ? `<div class="summary-ai-text">${esc(r.aiSummary)}</div>${tags}` : '<div class="summary-no-ai">No AI summary available</div>'}
+        ${r.aiSummary ? `<div class="summary-ai-text">${esc(r.aiSummary)}</div>${tags}` : '<div class="summary-no-ai">No fix prompt generated</div>'}
       </div>
     </div>`;
   });
@@ -674,8 +674,8 @@ function copySummaryPanel() {
     const original = row.querySelector('.summary-original .summary-note-text');
     const ai = row.querySelector('.summary-ai-text');
     const note = original ? original.textContent.trim() : '';
-    const summary = ai ? ai.textContent.trim() : '(no summary)';
-    text += `Note: ${note}\nSummary: ${summary}\n\n`;
+    const prompt = ai ? ai.textContent.trim() : '(no prompt generated)';
+    text += `## Task\n${prompt}\n\nContext: ${note}\n\n---\n\n`;
   });
 
   navigator.clipboard.writeText(text.trim()).then(() => {

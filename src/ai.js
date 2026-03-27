@@ -391,7 +391,32 @@ function estimateTokens(text) {
   return Math.ceil(text.length / 4);
 }
 
+const SUMMARIZE_SYSTEM = `You are the summarization backend for Sciurus, a knowledge-capture tool.
+You receive a list of notes from a single project. Each note has an ID and text written by the user.
+For each note, write a clear, concise 1-2 sentence summary capturing WHY it matters, not just what it says.
+Be specific — mention tools, features, errors, or concepts referenced.
+
+Return ONLY a valid JSON array. No markdown fences, no explanation.
+Each element: { "id": "string — the note ID", "summary": "string — your summary" }
+If a note is empty or unintelligible, return a short fallback like "No meaningful content to summarize."`;
+
+async function summarizeNotes(notes) {
+  if (!isEnabled() || !notes.length) return [];
+
+  const input = notes.map((n) => ({ id: n.id, note: n.comment || '' }));
+  try {
+    const result = await callGemini(SUMMARIZE_SYSTEM, [
+      { text: JSON.stringify(input) },
+    ]);
+    if (Array.isArray(result)) return result;
+    return [];
+  } catch (e) {
+    console.error('[AI] Summarize notes error:', e.message);
+    return [];
+  }
+}
+
 module.exports = {
-  init, isEnabled, categorize, search,
+  init, isEnabled, categorize, search, summarizeNotes,
   getCategorizePrompt, getPromptBlocks, setPromptBlocks, resetPromptBlocks, estimateTokens,
 };

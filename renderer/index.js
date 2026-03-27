@@ -516,6 +516,7 @@ function renderProjectDetail(el) {
       <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)}</h2>
     </div>
     <div class="project-detail-actions">
+      <button class="sb-btn-action summarize-btn" onclick="showProjectSummary(${proj.id})" title="Generate a side-by-side summary of all notes">&#x2728; Summarize</button>
       <button class="sb-btn-action" onclick="editProject(${proj.id})">Edit</button>
       <button class="sb-btn-action danger" onclick="confirmDeleteProject(${proj.id})">Delete</button>
     </div>
@@ -589,6 +590,102 @@ function searchProject() {
 function selectProject(id) {
   selectedProjectId = id;
   renderAll();
+}
+
+// ── Project Summary Panel ──
+
+async function showProjectSummary(projectId) {
+  const el = document.getElementById('mainArea');
+  const proj = projects.find((p) => p.id === projectId);
+  if (!proj) return;
+
+  // Show loading state
+  el.innerHTML = `<div class="project-detail-header">
+    <div>
+      <button class="back-btn" onclick="selectProject(${projectId})">&larr; Back to ${esc(proj.name)}</button>
+      <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)} — Summary</h2>
+    </div>
+  </div>
+  <div class="summary-loading"><span class="spinner">&#x2728;</span> Generating summaries&hellip;</div>`;
+
+  try {
+    const results = await window.quickclip.summarizeProject(projectId);
+    renderSummaryPanel(el, proj, results);
+    // Refresh clips in background since new summaries may have been saved
+    clips = await window.quickclip.getClips();
+  } catch (e) {
+    el.innerHTML += `<div class="empty"><div class="empty-title">Summarization failed</div><div class="empty-sub">${esc(e.message)}</div></div>`;
+  }
+}
+
+function renderSummaryPanel(el, proj, results) {
+  const withContent = results.filter((r) => r.comment || r.aiSummary);
+  if (withContent.length === 0) {
+    el.innerHTML = `<div class="project-detail-header">
+      <div>
+        <button class="back-btn" onclick="selectProject(${proj.id})">&larr; Back to ${esc(proj.name)}</button>
+        <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)} — Summary</h2>
+      </div>
+    </div>
+    <div class="empty"><div class="empty-title">No notes to summarize</div></div>`;
+    return;
+  }
+
+  let html = `<div class="project-detail-header">
+    <div>
+      <button class="back-btn" onclick="selectProject(${proj.id})">&larr; Back to ${esc(proj.name)}</button>
+      <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)} — Summary</h2>
+    </div>
+    <div class="project-detail-actions">
+      <button class="sb-btn-action summarize-btn" onclick="copySummaryPanel()" title="Copy all notes and summaries to clipboard">&#x1F4CB; Copy All</button>
+    </div>
+  </div>`;
+
+  html += `<div class="summary-panel">`;
+  html += `<div class="summary-row summary-header-row">
+    <div class="summary-col-label">Original Note</div>
+    <div class="summary-col-label">AI Summary</div>
+  </div>`;
+
+  withContent.forEach((r) => {
+    const catBadge = r.category ? `<span class="cat-badge">${esc(r.category)}</span>` : '';
+    const tags = (r.tags && r.tags.length) ? `<div class="summary-tags">${r.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>` : '';
+    html += `<div class="summary-row">
+      <div class="summary-col summary-original">
+        <div class="summary-note-text">${esc(r.comment) || '<em>No note</em>'}</div>
+        <div class="summary-note-meta">${catBadge} ${timeAgo(r.timestamp)}</div>
+      </div>
+      <div class="summary-col summary-ai">
+        ${r.aiSummary ? `<div class="summary-ai-text">${esc(r.aiSummary)}</div>${tags}` : '<div class="summary-no-ai">No AI summary available</div>'}
+      </div>
+    </div>`;
+  });
+
+  html += `</div>`;
+  el.innerHTML = html;
+}
+
+function copySummaryPanel() {
+  const rows = document.querySelectorAll('.summary-row:not(.summary-header-row)');
+  if (!rows.length) return;
+
+  let text = '';
+  rows.forEach((row) => {
+    const original = row.querySelector('.summary-original .summary-note-text');
+    const ai = row.querySelector('.summary-ai-text');
+    const note = original ? original.textContent.trim() : '';
+    const summary = ai ? ai.textContent.trim() : '(no summary)';
+    text += `Note: ${note}\nSummary: ${summary}\n\n`;
+  });
+
+  navigator.clipboard.writeText(text.trim()).then(() => {
+    const btn = document.querySelector('.summarize-btn');
+    if (btn) {
+      const orig = btn.innerHTML;
+      btn.innerHTML = '&#x2713; Copied!';
+      setTimeout(() => { btn.innerHTML = orig; }, 1500);
+    }
+  });
 }
 
 // ── Project CRUD ──

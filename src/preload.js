@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('quickclip', {
   // AI
   aiCategorize: (comment, imageData) => ipcRenderer.invoke('ai-categorize', comment, imageData),
   aiSearch: (query) => ipcRenderer.invoke('ai-search', query),
+  summarizeProject: (projectId) => ipcRenderer.invoke('summarize-project', projectId),
   hasApiKey: () => ipcRenderer.invoke('has-api-key'),
   getPromptBlocks: () => ipcRenderer.invoke('get-prompt-blocks'),
   savePromptBlocks: (enabled, custom) => ipcRenderer.invoke('save-prompt-blocks', enabled, custom),

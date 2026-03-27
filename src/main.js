@@ -450,6 +450,30 @@ ipcMain.handle('ai-search', async (_, query) => {
 
 ipcMain.handle('has-api-key', () => ai.isEnabled());
 
+ipcMain.handle('summarize-project', async (_, projectId) => {
+  const projectClips = await db.getClips(projectId);
+  const missing = projectClips.filter((c) => !c.aiSummary && c.comment);
+  if (missing.length > 0 && ai.isEnabled()) {
+    const generated = await ai.summarizeNotes(missing);
+    for (const item of generated) {
+      const clip = projectClips.find((c) => c.id === item.id);
+      if (clip && item.summary) {
+        clip.aiSummary = item.summary;
+        await db.updateClip(clip.id, { aiSummary: item.summary });
+      }
+    }
+    notifyMainWindow('clips-changed');
+  }
+  return projectClips.map((c) => ({
+    id: c.id,
+    comment: c.comment || '',
+    aiSummary: c.aiSummary || '',
+    category: c.category || '',
+    tags: c.tags || [],
+    timestamp: c.timestamp,
+  }));
+});
+
 // ── IPC Handlers: AI Prompt ──
 
 ipcMain.handle('get-prompt-blocks', () => ai.getPromptBlocks());

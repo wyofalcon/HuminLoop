@@ -416,15 +416,21 @@ ipcMain.handle('assign-clip-to-project', async (_, clipId, projectId) => {
 ipcMain.handle('complete-clip', async (_, clipId, archive) => {
   if (typeof clipId !== 'string') return false;
   const updates = { completed_at: new Date().toISOString() };
-  if (archive) updates.archived = true;
-  await db.updateClip(clipId, updates);
+  if (archive) {
+    // Archive option now sends to trash instead
+    await db.updateClip(clipId, updates);
+    await db.deleteClip(clipId);
+  } else {
+    await db.updateClip(clipId, updates);
+  }
   notifyMainWindow('clips-changed');
+  notifyMainWindow('projects-changed');
   return true;
 });
 
 ipcMain.handle('uncomplete-clip', async (_, clipId) => {
   if (typeof clipId !== 'string') return false;
-  await db.updateClip(clipId, { completed_at: null, archived: false });
+  await db.updateClip(clipId, { completed_at: null });
   notifyMainWindow('clips-changed');
   return true;
 });
@@ -742,6 +748,11 @@ async function launchMainApp() {
   db.purgeTrash(30).then((n) => {
     if (n > 0) console.log(`[Sciurus] Purged ${n} old trashed clip(s)`);
   }).catch((e) => console.error('[Sciurus] Trash purge failed:', e.message));
+
+  // One-time migration: move archived clips to trash
+  db.migrateArchivedToTrash().catch((e) =>
+    console.error('[Sciurus] Archive→Trash migration failed:', e.message)
+  );
 
   const hotkey = process.env.HOTKEY_COMBO || 'CommandOrControl+Shift+Q';
   globalShortcut.register(hotkey, () => {

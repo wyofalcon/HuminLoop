@@ -190,6 +190,19 @@ body {
 }
 .sb-btn.sb-add:hover { background: #3b82f611; }
 
+.sb-select {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+}
+.sb-select:focus { border-color: var(--accent-blue); }
+
 .proj-dot {
   display: inline-block;
   width: 8px;
@@ -1055,9 +1068,11 @@ kbd {
 
 /* ── Trash view ── */
 .trash-clip {
-  opacity: 0.75;
+  opacity: 0.85;
   border-left: 3px solid var(--danger);
+  background: rgba(239, 68, 68, 0.08);
 }
 .trash-clip:hover {
   opacity: 1;
+  background: rgba(239, 68, 68, 0.14);
 }

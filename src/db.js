@@ -98,4 +98,5 @@ module.exports = {
   saveSetting: (...a) => backend.saveSetting(...a),
   // Migration
   migrateFromStore: (...a) => backend.migrateFromStore(...a),
+  migrateArchivedToTrash: (...a) => backend.migrateArchivedToTrash(...a),
 };

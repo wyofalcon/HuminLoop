@@ -330,6 +330,14 @@ async function purgeTrash(olderThanDays = 30) {
   return rowCount;
 }
 
+async function migrateArchivedToTrash() {
+  const { rowCount } = await pool.query(
+    `UPDATE clips SET deleted_at = NOW(), archived = false WHERE archived = true AND deleted_at IS NULL`
+  );
+  if (rowCount > 0) console.log(`[Sciurus DB] Migrated ${rowCount} archived clip(s) to trash`);
+  return rowCount;
+}
+
 // ---------------------------------------------------------------------------
 // Comments
 // ---------------------------------------------------------------------------
@@ -354,7 +362,7 @@ async function deleteComment(commentId) {
 async function getProjects() {
   const { rows } = await pool.query(`
     SELECT p.*,
-           (SELECT COUNT(*) FROM clips WHERE project_id = p.id)::int AS "clipCount"
+           (SELECT COUNT(*) FROM clips WHERE project_id = p.id AND deleted_at IS NULL)::int AS "clipCount"
     FROM projects p
     ORDER BY p.name
   `);
@@ -571,4 +579,5 @@ module.exports = {
   saveSetting,
   // Migration
   migrateFromStore,
+  migrateArchivedToTrash,
 };

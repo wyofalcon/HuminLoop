@@ -12,7 +12,8 @@ let appVersion = null;
 // General Notes tab state
 let filterCat = 'All';
 let filterStatus = 'all';
-let showArchived = false;
+let filterTag = null;
+let sortBy = 'date-newest';
 let showTrash = false;
 let trashClips = [];
 let aiMatchedIds = null;
@@ -157,12 +158,11 @@ function renderSidebar() {
 
 function renderGeneralSidebar(el) {
   const generalClips = clips.filter((c) => !c.project_id);
-  const visibleClips = showArchived ? generalClips : generalClips.filter((c) => !c.archived);
   const allCats = ['All', ...categories.filter((c) => c !== 'Uncategorized')];
 
   let html = '<div class="sec">Categories</div>';
   allCats.forEach((cat) => {
-    const count = cat === 'All' ? visibleClips.length : visibleClips.filter((c) => c.category === cat).length;
+    const count = cat === 'All' ? generalClips.length : generalClips.filter((c) => c.category === cat).length;
     if (cat !== 'All' && count === 0) return;
     const active = filterCat === cat ? 'active' : '';
     html += `<button class="sb-btn ${active}" onclick="setCat('${escAttr(cat)}')" title="Filter by ${escAttr(cat)}">`
@@ -175,9 +175,29 @@ function renderGeneralSidebar(el) {
     html += `<button class="sb-btn ${filterStatus === s ? 'active' : ''}" onclick="setStatus('${s}')">${label}</button>`;
   });
 
-  html += '<div class="sec" style="margin-top:12px">Archive</div>';
-  html += `<button class="sb-btn ${showArchived ? 'active' : ''}" onclick="toggleArchived()" title="Show or hide archived completed notes">
-    ${showArchived ? '&#x2611; Show Archived' : '&#x2610; Show Archived'}</button>`;
+  // Tags section
+  const allTags = [];
+  generalClips.forEach((c) => {
+    if (c.tags && c.tags.length) c.tags.forEach((t) => { if (!allTags.includes(t)) allTags.push(t); });
+  });
+  allTags.sort();
+  if (allTags.length > 0) {
+    html += '<div class="sec">Tags</div>';
+    html += `<button class="sb-btn ${filterTag === null ? 'active' : ''}" onclick="setTag(null)">All Tags</button>`;
+    allTags.forEach((tag) => {
+      const count = generalClips.filter((c) => c.tags && c.tags.includes(tag)).length;
+      html += `<button class="sb-btn ${filterTag === tag ? 'active' : ''}" onclick="setTag('${escAttr(tag)}')" title="Filter by #${escAttr(tag)}">
+        <span>#${esc(tag)}</span><span class="sb-count">${count}</span></button>`;
+    });
+  }
+
+  // Sort section
+  html += '<div class="sec">Sort</div>';
+  html += `<select class="sb-select" onchange="setSortBy(this.value)">
+    <option value="date-newest" ${sortBy === 'date-newest' ? 'selected' : ''}>Newest First</option>
+    <option value="date-oldest" ${sortBy === 'date-oldest' ? 'selected' : ''}>Oldest First</option>
+    <option value="tag-az" ${sortBy === 'tag-az' ? 'selected' : ''}>Tag A-Z</option>
+  </select>`;
 
   html += '<div class="sec" style="margin-top:12px">Trash</div>';
   html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
@@ -199,10 +219,6 @@ function renderProjectsSidebar(el) {
   });
 
   html += `<button class="sb-btn sb-add" onclick="showNewProjectDialog()">+ New Project</button>`;
-
-  html += '<div class="sec" style="margin-top:12px">Archive</div>';
-  html += `<button class="sb-btn ${showArchived ? 'active' : ''}" onclick="toggleArchived()" title="Show or hide archived completed notes">
-    ${showArchived ? '&#x2611; Show Archived' : '&#x2610; Show Archived'}</button>`;
 
   html += '<div class="sec" style="margin-top:12px">Trash</div>';
   html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
@@ -416,8 +432,6 @@ function renderGeneralContent(el) {
 
 function getFilteredGeneral() {
   let filtered = clips.filter((c) => !c.project_id);
-  // Hide archived unless toggled on
-  if (!showArchived) filtered = filtered.filter((c) => !c.archived);
   if (filterCat !== 'All') filtered = filtered.filter((c) => c.category === filterCat);
   if (filterStatus !== 'all') {
     if (filterStatus === 'completed') {
@@ -438,6 +452,21 @@ function getFilteredGeneral() {
       (c.comments || []).some((x) => x.text.toLowerCase().includes(q))
     );
   }
+  // Tag filter
+  if (filterTag) {
+    filtered = filtered.filter((c) => c.tags && c.tags.includes(filterTag));
+  }
+  // Sort
+  if (sortBy === 'date-oldest') {
+    filtered.sort((a, b) => a.timestamp - b.timestamp);
+  } else if (sortBy === 'tag-az') {
+    filtered.sort((a, b) => {
+      const ta = (a.tags && a.tags.length) ? a.tags[0].toLowerCase() : 'zzz';
+      const tb = (b.tags && b.tags.length) ? b.tags[0].toLowerCase() : 'zzz';
+      return ta.localeCompare(tb);
+    });
+  }
+  // date-newest is the default order from DB
   return filtered;
 }
 
@@ -452,8 +481,13 @@ function setStatus(status) {
   renderAll();
 }
 
-function toggleArchived() {
-  showArchived = !showArchived;
+function setTag(tag) {
+  filterTag = tag;
+  renderAll();
+}
+
+function setSortBy(sort) {
+  sortBy = sort;
   renderAll();
 }
 
@@ -592,7 +626,6 @@ function renderProjectDetail(el) {
   if (!proj) { selectProject(null); return; }
 
   let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
-  if (!showArchived) projectClips = projectClips.filter((c) => !c.archived);
 
   let html = `<div class="project-detail-header">
     <div>
@@ -644,7 +677,6 @@ function searchProject() {
   if (!proj) return;
 
   let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
-  if (!showArchived) projectClips = projectClips.filter((c) => !c.archived);
   if (q) {
     projectClips = projectClips.filter((c) =>
       (c.comment || '').toLowerCase().includes(q) ||
@@ -1195,11 +1227,10 @@ function renderClipCard(c, inProject) {
   const id = escAttr(c.id);
   const isActive = c.status === 'active';
   const isCompleted = !!c.completedAt;
-  const isArchived = !!c.archived;
   const statusClass = isActive ? 'badge-active' : 'badge-parked';
   const statusLabel = isActive ? 'ACTIVE' : 'PARKED';
 
-  let html = `<div class="clip${isCompleted ? ' clip-completed' : ''}${isArchived ? ' clip-archived' : ''}" data-testid="clip-card-${id}">`;
+  let html = `<div class="clip${isCompleted ? ' clip-completed' : ''}" data-testid="clip-card-${id}">`;
 
   // Header row
   html += `<div class="clip-hdr">`;
@@ -1255,7 +1286,7 @@ function renderClipCard(c, inProject) {
 
   // Completed timestamp
   if (isCompleted) {
-    html += `<div class="completed-stamp" title="Completed at ${esc(c.completedAt)}">&#x2713; Completed ${timeAgo(new Date(c.completedAt).getTime())}${isArchived ? ' · Archived' : ''}</div>`;
+    html += `<div class="completed-stamp" title="Completed at ${esc(c.completedAt)}">&#x2713; Completed ${timeAgo(new Date(c.completedAt).getTime())}</div>`;
   }
 
   // Tags
@@ -1321,14 +1352,14 @@ function showCompleteDialog(id) {
       <p>What would you like to do with this note?</p>
       <div class="complete-dialog-actions">
         <button class="complete-dialog-btn keep-btn" onclick="completeClip('${escAttr(id)}', false)" data-testid="complete-keep-btn">
-          <span class="complete-icon">&#x1F4CC;</span>
-          <span class="complete-label">Keep Here</span>
-          <span class="complete-desc">Stays visible, dimmed</span>
+          <span class="complete-icon">&#x2713;</span>
+          <span class="complete-label">Complete</span>
+          <span class="complete-desc">Mark done, stays visible</span>
         </button>
-        <button class="complete-dialog-btn archive-btn" onclick="completeClip('${escAttr(id)}', true)" data-testid="complete-archive-btn">
-          <span class="complete-icon">&#x1F4E6;</span>
-          <span class="complete-label">Archive</span>
-          <span class="complete-desc">Hidden from default view</span>
+        <button class="complete-dialog-btn archive-btn" onclick="completeClip('${escAttr(id)}', true)" data-testid="complete-trash-btn">
+          <span class="complete-icon">&#x1F5D1;</span>
+          <span class="complete-label">Trash</span>
+          <span class="complete-desc">Done &amp; moved to trash</span>
         </button>
       </div>
       <button class="cancel-btn" onclick="document.getElementById('completeDialog').remove()">Cancel</button>

@@ -82,6 +82,7 @@ async function runMigrations() {
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS ai_fix_prompt TEXT DEFAULT NULL`,
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS summarize_count INTEGER NOT NULL DEFAULT 0`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }
@@ -158,6 +159,7 @@ const CLIPS_BASE_QUERY = `
          c.window_title AS "windowTitle",
          c.process_name AS "processName",
          c.deleted_at AS "deletedAt",
+         c.summarize_count AS "summarizeCount",
          COALESCE(
            json_agg(
              json_build_object('text', cc.text, 'ts', cc.ts)
@@ -235,7 +237,7 @@ async function saveClip(clip) {
 }
 
 async function updateClip(id, updates) {
-  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived'];
+  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived', 'summarize_count'];
   const setClauses = [];
   const params = [];
   let paramIdx = 1;
@@ -286,6 +288,9 @@ async function updateClip(id, updates) {
     } else if (key === 'archived') {
       setClauses.push(`archived = $${paramIdx++}`);
       params.push(!!val);
+    } else if (key === 'summarize_count') {
+      setClauses.push(`summarize_count = $${paramIdx++}`);
+      params.push(val);
     }
   }
 

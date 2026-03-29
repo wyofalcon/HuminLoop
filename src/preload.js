@@ -48,6 +48,9 @@ contextBridge.exposeInMainWorld('quickclip', {
   resetPromptBlocks: () => ipcRenderer.invoke('reset-prompt-blocks'),
   addCustomBlock: (label, text) => ipcRenderer.invoke('add-custom-block', label, text),
 
+  // AI retrigger
+  retriggerAi: (clipId) => ipcRenderer.invoke('retrigger-ai', clipId),
+
   // App info
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 

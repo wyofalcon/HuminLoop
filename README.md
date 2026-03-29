@@ -41,6 +41,9 @@ to context-switch between your app, your terminal, and a notes doc.
 - **Markup color semantics** — red = bug, green = approved, pink = question (AI reads your annotations)
 - **AI search** — natural language search across all clips
 - **1-click project summarization** — generates actionable AI fix prompts for all project notes in a side-by-side panel with copy-all
+- **Summarize tracking** — notes darken progressively each time they're included in a summary, with a counter badge showing how many times
+- **Inline AI prompts** — AI-generated fix prompts and summaries shown directly on clip cards with one-click copy to clipboard
+- **Per-clip AI retrigger** — manually re-run AI categorization on any clip
 - **Complete/Trash system** — mark notes as done (keep visible or trash), with restore from trash
 - **Tag management** — add/remove tags per clip from existing tags or create new ones, filter by tag in sidebar
 - **Sorting** — sort notes by newest, oldest, or tag A-Z
@@ -332,6 +335,14 @@ sciurus/
 | **Rules** | In-memory | Window title + process name matching, regex support, 5-min cache |
 | **Window Info** | OS-native | Win32 P/Invoke, xdotool (X11), gdbus (Wayland+GNOME) |
 | **Build** | electron-builder | NSIS (Windows), AppImage + deb (Linux), dmg (macOS) |
+
+### Security & Robustness
+
+- **Context-isolated renderers** — `contextIsolation: true`, no `nodeIntegration`
+- **Input sanitization** — `.env` writes validate key format and strip newlines to prevent injection
+- **API timeouts** — 30-second abort on all Gemini API calls to prevent hangs
+- **Safe JSON parsing** — database row parsing wrapped in try-catch with fallback defaults
+- **Guarded async** — background AI calls include `.catch()`, concurrent search requests deduplicated
 
 ---
 

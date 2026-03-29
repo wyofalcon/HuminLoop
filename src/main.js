@@ -50,7 +50,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ALLOWED_CLIP_FIELDS = [
   'category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment',
-  'window_title', 'process_name', 'completed_at', 'archived',
+  'window_title', 'process_name', 'completed_at', 'archived', 'summarize_count',
 ];
 
 // Tiny 32x32 fallback icon (transparent PNG) for the system tray
@@ -339,7 +339,8 @@ ipcMain.handle('save-clip', async (_, clip) => {
   // AI categorization — runs if still uncategorized OR no project assigned
   if ((clip.category === 'Uncategorized' || !clip.project_id) && (clip.comment || imageData) && ai.isEnabled()) {
     console.log(`[Sciurus] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
-    autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name);
+    autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
+      .catch(e => console.error('[Sciurus] Auto-categorize background error:', e.message));
   }
   return true;
 });
@@ -505,7 +506,9 @@ ipcMain.handle('summarize-project', async (_, projectId) => {
       const clip = projectClips.find((c) => c.id === item.id);
       if (clip && item.summary) {
         clip.aiFixPrompt = item.summary;
-        await db.updateClip(clip.id, { aiFixPrompt: item.summary });
+        const newCount = (clip.summarizeCount || 0) + 1;
+        clip.summarizeCount = newCount;
+        await db.updateClip(clip.id, { aiFixPrompt: item.summary, summarize_count: newCount });
       }
     }
     notifyMainWindow('clips-changed');
@@ -518,6 +521,7 @@ ipcMain.handle('summarize-project', async (_, projectId) => {
     category: c.category || '',
     tags: c.tags || [],
     timestamp: c.timestamp,
+    summarizeCount: c.summarizeCount || 0,
   }));
 });
 
@@ -554,6 +558,17 @@ ipcMain.handle('get-app-version', () => {
 });
 
 ipcMain.handle('get-db-backend', () => db.getBackendName());
+
+// Manual AI retrigger for a single clip
+ipcMain.handle('retrigger-ai', async (_, clipId) => {
+  if (typeof clipId !== 'string') return false;
+  const clip = await db.getClip(clipId);
+  if (!clip) return false;
+  if (!ai.isEnabled()) return false;
+  const imageData = images.loadImage(clipId);
+  await autoCategorize(clipId, clip.comment || '', imageData, clip.windowTitle, clip.processName);
+  return true;
+});
 
 // ── IPC Handlers: Window Controls ──
 
@@ -634,6 +649,9 @@ ipcMain.handle('setup-check-credentials', async () => {
 
 ipcMain.handle('setup-save-env', async (_, key, value) => {
   const envPath = path.join(__dirname, '..', '.env');
+  // Validate key/value to prevent injection
+  if (!/^[A-Z_][A-Z0-9_]*$/i.test(key)) return false;
+  const safeValue = String(value).replace(/[\r\n]/g, '').trim();
   let content = '';
   if (fs.existsSync(envPath)) {
     content = fs.readFileSync(envPath, 'utf8');
@@ -641,13 +659,13 @@ ipcMain.handle('setup-save-env', async (_, key, value) => {
   // Replace existing key or append
   const regex = new RegExp(`^${key}=.*$`, 'm');
   if (regex.test(content)) {
-    content = content.replace(regex, `${key}=${value}`);
+    content = content.replace(regex, `${key}=${safeValue}`);
   } else {
-    content = content.trimEnd() + `\n${key}=${value}\n`;
+    content = content.trimEnd() + `\n${key}=${safeValue}\n`;
   }
   fs.writeFileSync(envPath, content, 'utf8');
   // Also set in current process
-  process.env[key] = value;
+  process.env[key] = safeValue;
   return true;
 });
 

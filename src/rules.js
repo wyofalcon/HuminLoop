@@ -198,7 +198,10 @@ async function evaluateRules(windowTitle, processName) {
     } else if (rule.match_type === 'startswith') {
       matched = target.toLowerCase().startsWith(rule.pattern.toLowerCase());
     } else if (rule.match_type === 'regex') {
-      try { matched = new RegExp(rule.pattern, 'i').test(target); } catch { /* invalid regex */ }
+      try {
+        if (!rule._compiledRegex) rule._compiledRegex = new RegExp(rule.pattern, 'i');
+        matched = rule._compiledRegex.test(target);
+      } catch { /* invalid regex */ }
     }
 
     if (matched) {

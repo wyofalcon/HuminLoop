@@ -424,7 +424,8 @@ function renderGeneralContent(el) {
       + `<div class="empty-title">${isEmpty ? 'No notes yet' : 'No matches'}</div>`
       + `<div class="empty-sub">${isEmpty ? 'Take a screenshot — capture pops automatically' : 'Try a different search'}</div></div>`;
   } else {
-    html += filtered.map((c) => renderClipCard(c)).join('');
+    const tags = getAllKnownTags();
+    html += filtered.map((c) => renderClipCard(c, false, tags)).join('');
   }
 
   el.innerHTML = html;
@@ -563,17 +564,21 @@ function renderTrashContent(el) {
   loadDiskImages(el);
 }
 
+let _aiSearchInFlight = false;
 async function doAiSearch() {
+  if (_aiSearchInFlight) return;
   const input = document.getElementById('searchInput');
   searchQuery = input ? input.value.trim() : '';
   if (!searchQuery) { clearSearch(); return; }
   const btn = document.getElementById('aiSearchBtn');
+  _aiSearchInFlight = true;
   if (btn) { btn.disabled = true; btn.textContent = '...'; }
   try {
     aiMatchedIds = await window.quickclip.aiSearch(searchQuery);
   } catch (e) {
     console.error('[AI] Search failed:', e);
   } finally {
+    _aiSearchInFlight = false;
     if (btn) { btn.disabled = false; btn.textContent = 'AI Search'; }
     renderContent();
   }
@@ -658,7 +663,8 @@ function renderProjectDetail(el) {
       <div class="empty-sub">Assign clips from General Notes or capture new ones</div></div>`;
   } else {
     try {
-      html += projectClips.map((c) => renderClipCard(c, true)).join('');
+      const tags = getAllKnownTags();
+      html += projectClips.map((c) => renderClipCard(c, true, tags)).join('');
     } catch (e) {
       html += `<div class="empty"><div class="empty-title">Render error: ${e.message}</div></div>`;
     }
@@ -668,7 +674,13 @@ function renderProjectDetail(el) {
   loadDiskImages(el);
 }
 
+let _projectSearchTimer = null;
 function searchProject() {
+  clearTimeout(_projectSearchTimer);
+  _projectSearchTimer = setTimeout(_doSearchProject, 200);
+}
+
+function _doSearchProject() {
   const input = document.getElementById('projectSearchInput');
   if (!input) return;
   const q = input.value.trim().toLowerCase();
@@ -689,7 +701,7 @@ function searchProject() {
   }
 
   const clipListHtml = projectClips.length > 0
-    ? projectClips.map((c) => renderClipCard(c, true)).join('')
+    ? projectClips.map((c) => renderClipCard(c, true, getAllKnownTags())).join('')
     : `<div class="empty"><div class="empty-title">No matches</div></div>`;
 
   // Replace clip list only (find after search-bar)
@@ -767,10 +779,12 @@ function renderSummaryPanel(el, proj, results) {
   withContent.forEach((r) => {
     const catBadge = r.category ? `<span class="cat-badge">${esc(r.category)}</span>` : '';
     const tags = (r.tags && r.tags.length) ? `<div class="summary-tags">${r.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>` : '';
-    html += `<div class="summary-row">
+    const sumCount = r.summarizeCount || 0;
+    const rowDarken = sumCount > 0 ? ` style="background: color-mix(in srgb, var(--bg-card), black ${Math.min(sumCount * 6, 30)}%)"` : '';
+    html += `<div class="summary-row"${rowDarken}>
       <div class="summary-col summary-original">
         <div class="summary-note-text">${esc(r.comment) || '<em>No note</em>'}</div>
-        <div class="summary-note-meta">${catBadge} ${timeAgo(r.timestamp)}</div>
+        <div class="summary-note-meta">${catBadge} ${timeAgo(r.timestamp)}${sumCount > 0 ? ` <span class="badge badge-summarized">&#x2728; ${sumCount}x</span>` : ''}</div>
       </div>
       <div class="summary-col summary-ai">
         ${r.aiFixPrompt ? `<div class="summary-ai-text">${esc(r.aiFixPrompt)}</div>${tags}` : '<div class="summary-no-ai">No fix prompt generated</div>'}
@@ -1224,14 +1238,26 @@ async function addCustomBlock() {
 //  CLIP CARD
 // =====================================================================
 
-function renderClipCard(c, inProject) {
+function getAllKnownTags() {
+  const tagSet = new Set();
+  for (const cl of clips) {
+    if (cl.tags && cl.tags.length) cl.tags.forEach(t => tagSet.add(t));
+  }
+  return Array.from(tagSet).sort();
+}
+
+function renderClipCard(c, inProject, allKnownTags) {
   const id = escAttr(c.id);
   const isActive = c.status === 'active';
   const isCompleted = !!c.completedAt;
   const statusClass = isActive ? 'badge-active' : 'badge-parked';
   const statusLabel = isActive ? 'ACTIVE' : 'PARKED';
 
-  let html = `<div class="clip${isCompleted ? ' clip-completed' : ''}" data-testid="clip-card-${id}">`;
+  // Progressive darkening based on summarize count
+  const sumCount = c.summarizeCount || 0;
+  const darkenStyle = sumCount > 0 ? ` style="background: color-mix(in srgb, var(--bg-card), black ${Math.min(sumCount * 6, 30)}%)"` : '';
+
+  let html = `<div class="clip${isCompleted ? ' clip-completed' : ''}"${darkenStyle} data-testid="clip-card-${id}">`;
 
   // Header row
   html += `<div class="clip-hdr">`;
@@ -1247,9 +1273,22 @@ function renderClipCard(c, inProject) {
   if (c.projectName && !inProject) {
     html += `<span class="proj-badge" style="border-color:${esc(c.projectColor || '#3b82f6')}">${esc(c.projectName)}</span>`;
   }
+  if (sumCount > 0) {
+    html += `<span class="badge badge-summarized" title="Summarized ${sumCount} time${sumCount > 1 ? 's' : ''}">&#x2728; ${sumCount}x</span>`;
+  }
   html += `</div>`;
   html += `<div class="clip-actions">`;
   html += `<span class="clip-time">${timeAgo(c.timestamp)}</span>`;
+
+  // Copy prompt button (if aiFixPrompt exists)
+  if (c.aiFixPrompt) {
+    html += `<button class="copy-prompt-btn" onclick="copyPrompt('${id}')" title="Copy AI fix prompt to clipboard">&#x1F4CB; Copy</button>`;
+  }
+
+  // Manual AI trigger (if has comment but no AI summary, or no aiFixPrompt)
+  if ((c.comment && !c.aiSummary) || (c.comment && !c.aiFixPrompt)) {
+    html += `<button class="ai-trigger-btn" onclick="retriggerAi('${id}')" title="Run AI categorization on this clip">&#x2728; AI</button>`;
+  }
 
   // Complete button (only if not already complete)
   if (!isCompleted) {
@@ -1282,8 +1321,11 @@ function renderClipCard(c, inProject) {
   // Comment
   if (c.comment) html += `<div class="comment">${esc(c.comment)}</div>`;
 
-  // AI summary
-  if (c.aiSummary) html += `<div class="ai-summary" title="AI-generated summary">${esc(c.aiSummary)}</div>`;
+  // AI summary (filing label)
+  if (c.aiSummary) html += `<div class="ai-summary" title="AI-generated summary"><span class="ai-label">AI Summary</span> ${esc(c.aiSummary)}</div>`;
+
+  // AI fix prompt inline (actionable prompt for IDE injection)
+  if (c.aiFixPrompt) html += `<div class="ai-fix-prompt" title="AI-generated fix prompt — paste into your IDE's AI helper"><span class="ai-label">AI Prompt</span> ${esc(c.aiFixPrompt)}</div>`;
 
   // Completed timestamp
   if (isCompleted) {
@@ -1300,9 +1342,6 @@ function renderClipCard(c, inProject) {
   html += `<div id="ti-${id}" style="display:none;margin-bottom:6px;gap:4px">`;
   html += `<select class="tag-select" id="tsel-${id}" onchange="onTagSelect('${id}', this.value)">`;
   html += `<option value="">Pick a tag...</option>`;
-  const allKnownTags = [];
-  clips.forEach((cl) => { if (cl.tags && cl.tags.length) cl.tags.forEach((t) => { if (!allKnownTags.includes(t)) allKnownTags.push(t); }); });
-  allKnownTags.sort();
   const currentTags = c.tags || [];
   allKnownTags.forEach((t) => {
     if (!currentTags.includes(t)) html += `<option value="${escAttr(t)}">#${esc(t)}</option>`;
@@ -1407,6 +1446,24 @@ async function deleteClip(id) {
   renderAll();
 }
 
+async function copyPrompt(id) {
+  const clip = clips.find(c => c.id === id);
+  if (clip && clip.aiFixPrompt) {
+    await navigator.clipboard.writeText(clip.aiFixPrompt);
+  }
+}
+
+async function retriggerAi(id) {
+  const result = await window.quickclip.retriggerAi(id);
+  if (result) {
+    const idx = clips.findIndex(c => c.id === id);
+    if (idx !== -1) {
+      clips[idx] = { ...clips[idx], ...result };
+    }
+    renderAll();
+  }
+}
+
 async function moveToProject(clipId, projectId) {
   if (!projectId) return;
   await window.quickclip.assignClipToProject(clipId, parseInt(projectId));
@@ -1504,30 +1561,4 @@ async function removeTag(id, tag) {
   renderAll();
 }
 
-// ── AI Manual Categorize ──
-
-async function aiCategorize(clip) {
-  document.getElementById('aiBar').style.display = 'flex';
-  document.getElementById('aiBarMsg').textContent = 'AI categorizing...';
-  try {
-    const result = await window.quickclip.aiCategorize(clip.comment, clip.image);
-    if (!result) return;
-    const updates = {};
-    if (result.category && clip.category === 'Uncategorized') updates.category = result.category;
-    if (result.tags) updates.tags = result.tags;
-    if (result.summary) updates.aiSummary = result.summary;
-    if (result.url) updates.url = result.url;
-    if (result.project_id && !clip.project_id) updates.project_id = result.project_id;
-    if (Object.keys(updates).length) {
-      await window.quickclip.updateClip(clip.id, updates);
-      clips = await window.quickclip.getClips();
-      categories = await window.quickclip.getCategories();
-      projects = await window.quickclip.getProjects();
-      renderAll();
-    }
-  } catch (e) {
-    console.error('[AI] Categorize failed:', e);
-  } finally {
-    document.getElementById('aiBar').style.display = 'none';
-  }
-}
+// end of file

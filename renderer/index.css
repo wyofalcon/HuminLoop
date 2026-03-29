@@ -291,6 +291,7 @@ body {
 .clip-completed:hover { opacity: 0.8; }
 .clip-completed .comment,
 .clip-completed .ai-summary,
+.clip-completed .ai-fix-prompt,
 .clip-completed .tags-row { opacity: 0.7; }
 
 /* Complete button on clip card */
@@ -438,6 +439,44 @@ body {
   border-radius: 6px;
   margin-bottom: 8px;
 }
+
+.ai-summary .ai-label,
+.ai-fix-prompt .ai-label {
+  font-weight: 600;
+  margin-right: 4px;
+  opacity: 0.7;
+}
+
+.ai-fix-prompt {
+  font-size: 12px;
+  color: #34d399;
+  background: #34d39911;
+  padding: 5px 10px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.badge-summarized {
+  background: #a78bfa22;
+  color: var(--accent-violet);
+  font-size: 10px;
+}
+
+.copy-prompt-btn,
+.ai-trigger-btn {
+  padding: 2px 8px;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s;
+}
+.copy-prompt-btn:hover { border-color: #34d399; color: #34d399; }
+.ai-trigger-btn:hover { border-color: var(--accent-violet); color: var(--accent-violet); }
 
 .tags-row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
 .tag {

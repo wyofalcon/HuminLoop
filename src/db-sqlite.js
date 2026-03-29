@@ -151,6 +151,7 @@ function runSqliteMigrations() {
     `ALTER TABLE clips ADD COLUMN ai_fix_prompt TEXT DEFAULT NULL`,
     `ALTER TABLE clips ADD COLUMN deleted_at TEXT DEFAULT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
+    `ALTER TABLE clips ADD COLUMN summarize_count INTEGER NOT NULL DEFAULT 0`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column/index already exists */ }
@@ -232,6 +233,7 @@ const CLIPS_BASE_QUERY = `
          c.window_title AS "windowTitle",
          c.process_name AS "processName",
          c.deleted_at AS "deletedAt",
+         c.summarize_count AS "summarizeCount",
          CASE WHEN COUNT(cc.id) = 0 THEN '[]'
               ELSE json_group_array(json_object('text', cc.text, 'ts', cc.ts))
          END AS comments
@@ -248,8 +250,8 @@ const CLIPS_GROUP = `
 
 function parseClipRow(row) {
   if (!row) return null;
-  row.tags = JSON.parse(row.tags || '[]');
-  row.comments = JSON.parse(row.comments || '[]');
+  try { row.tags = JSON.parse(row.tags || '[]'); } catch { row.tags = []; }
+  try { row.comments = JSON.parse(row.comments || '[]'); } catch { row.comments = []; }
   return row;
 }
 
@@ -297,7 +299,7 @@ async function saveClip(clip) {
 }
 
 async function updateClip(id, updates) {
-  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived'];
+  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived', 'summarize_count'];
   const setClauses = [];
   const params = [];
 
@@ -342,6 +344,9 @@ async function updateClip(id, updates) {
     } else if (key === 'archived') {
       setClauses.push('archived = ?');
       params.push(val ? 1 : 0);
+    } else if (key === 'summarize_count') {
+      setClauses.push('summarize_count = ?');
+      params.push(val);
     }
   }
 

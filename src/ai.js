@@ -243,7 +243,7 @@ async function categorize(comment, categories, imageDataURL = null, projects = n
 
   const parts = [];
   if (imageDataURL) {
-    const base64 = imageDataURL.replace(/^data:image\/\w+;base64,/, '');
+    const base64 = imageDataURL.replace(/^data:image\/[^;]+;base64,/, '');
     parts.push({ inline_data: { mime_type: 'image/png', data: base64 } });
   }
   parts.push({ text: userText });
@@ -308,15 +308,24 @@ async function callGemini(systemInstruction, parts) {
     headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts }],
-      systemInstruction: { parts: [{ text: systemInstruction }] },
-      generationConfig: GENERATION_CONFIG,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts }],
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        generationConfig: GENERATION_CONFIG,
+      }),
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const data = await res.json();
   if (data.error) {
@@ -325,7 +334,12 @@ async function callGemini(systemInstruction, parts) {
 
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   const clean = text.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  try {
+    return JSON.parse(clean);
+  } catch (e) {
+    console.error('[AI] Failed to parse response:', clean.slice(0, 200));
+    return null;
+  }
 }
 
 // ── Prompt Composition ──

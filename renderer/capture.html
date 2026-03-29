@@ -16,8 +16,11 @@
     <div class="ico">&#x1F4F8;</div>
     <div>Waiting for screenshot...</div>
     <div class="empty-sub">It will appear here automatically</div>
+    <button type="button" class="upload-btn" onclick="triggerUpload()" title="Upload an image from your computer">&#x1F4C1; Upload Photo</button>
+    <div class="empty-hint">A photo isn't necessary — notes work great on their own!</div>
   </div>
   <img id="ssImg" class="hidden" alt="Captured screenshot" />
+  <input type="file" id="photoUpload" accept="image/*" style="display:none" onchange="handleUpload(event)" />
 </div>
 
 <div class="field nd">

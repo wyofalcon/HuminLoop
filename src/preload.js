@@ -51,6 +51,10 @@ contextBridge.exposeInMainWorld('quickclip', {
   // AI retrigger
   retriggerAi: (clipId) => ipcRenderer.invoke('retrigger-ai', clipId),
 
+  // Audit ledger
+  getAuditLog: () => ipcRenderer.invoke('get-audit-log'),
+  clearAuditLog: () => ipcRenderer.invoke('clear-audit-log'),
+
   // App info
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 

@@ -405,34 +405,52 @@ function estimateTokens(text) {
   return Math.ceil(text.length / 4);
 }
 
-const SUMMARIZE_SYSTEM = `You are the summarization backend for Sciurus, a knowledge-capture tool.
-You receive a list of notes from a single project. Each note has an ID and text written by the user.
-For each note, generate an actionable AI prompt that another AI (like Copilot or ChatGPT) could use
-to fix, implement, or resolve the issue described in the note. The prompt should:
+function getSummarizePrompt() {
+  const base = `You are the summarization backend for Sciurus, a knowledge-capture tool.
+You receive a note from a project, optionally with a screenshot. Generate an actionable AI prompt
+that another AI (like Copilot or ChatGPT) could use to fix, implement, or resolve the issue.
+The prompt should:
 - State the problem or task clearly in imperative form (e.g. "Fix the…", "Implement…", "Refactor…")
 - Include relevant technical context: file names, function names, error messages, tools, or libraries mentioned
-- Be specific enough to act on without seeing the original screenshot
+- If a screenshot is provided, analyze it for visible code, errors, UI issues, file paths, and tool context
 - If the note describes a working solution or reference, frame it as "Apply this pattern: …" or "Use this approach: …"
-- Keep it to 1-3 sentences — concise but complete enough for an AI to start working immediately
+- Keep it to 1-3 sentences — concise but complete enough for an AI to start working immediately`;
 
-Return ONLY a valid JSON array. No markdown fences, no explanation.
-Each element: { "id": "string — the note ID", "summary": "string — the actionable AI prompt" }
-If a note is empty or unintelligible, return a fallback like "Review this note — insufficient context to generate a fix prompt."`;
+  // Include user custom rules so they apply to summarization too
+  const enabled = enabledBlocks || getDefaultEnabledBlocks();
+  const extras = [];
+  for (const cb of customBlocks) {
+    if (cb.enabled) extras.push(cb.text);
+  }
+
+  const output = `Return ONLY valid JSON. No markdown fences, no explanation.
+Schema: { "id": "string — the note ID", "summary": "string — the actionable AI prompt" }
+If the note is empty or unintelligible, return a fallback like "Review this note — insufficient context to generate a fix prompt."`;
+
+  return [base, ...extras, output].join('\n\n');
+}
 
 async function summarizeNotes(notes) {
   if (!isEnabled() || !notes.length) return [];
 
-  const input = notes.map((n) => ({ id: n.id, note: n.comment || '' }));
-  try {
-    const result = await callGemini(SUMMARIZE_SYSTEM, [
-      { text: JSON.stringify(input) },
-    ]);
-    if (Array.isArray(result)) return result;
-    return [];
-  } catch (e) {
-    console.error('[AI] Summarize notes error:', e.message);
-    return [];
+  const results = [];
+  for (const n of notes) {
+    try {
+      const parts = [];
+      if (n.imageDataURL) {
+        const base64 = n.imageDataURL.replace(/^data:image\/[^;]+;base64,/, '');
+        parts.push({ inline_data: { mime_type: 'image/png', data: base64 } });
+      }
+      parts.push({ text: `Note ID: ${n.id}\nUser's note: "${n.comment || ''}"` });
+      const result = await callGemini(getSummarizePrompt(), parts);
+      if (result && result.summary) {
+        results.push({ id: n.id, summary: result.summary });
+      }
+    } catch (e) {
+      console.error(`[AI] Summarize note ${n.id} error:`, e.message);
+    }
   }
+  return results;
 }
 
 module.exports = {

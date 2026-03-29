@@ -271,13 +271,16 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
     if (!result) return;
 
     const updates = {};
-    if (result.category) updates.category = result.category;
+    // Only override category if clip was Uncategorized (preserve rule assignments)
+    const clip = await db.getClip(clipId);
+    if (result.category && (!clip || clip.category === 'Uncategorized')) {
+      updates.category = result.category;
+    }
     if (result.tags) updates.tags = result.tags;
     if (result.summary) updates.aiSummary = result.summary;
     if (result.url) updates.url = result.url;
 
     // AI-suggested project assignment (only if clip isn't already assigned)
-    const clip = await db.getClip(clipId);
     if (result.project_id && (!clip || !clip.project_id)) {
       // Verify the project actually exists
       const proj = await db.getProject(result.project_id);
@@ -299,6 +302,7 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
       if (updates.project_id) notifyMainWindow('projects-changed');
     }
     console.log(`[Sciurus] AI categorized: "${comment.slice(0, 30)}" → ${result.category}`);
+    addAuditEntry('ai', `AI categorized clip ${clipId}: ${result.category}`);
   } catch (e) {
     console.error('[Sciurus] Auto-categorize failed:', e.message);
   }
@@ -335,12 +339,16 @@ ipcMain.handle('save-clip', async (_, clip) => {
 
   await db.saveClip(clip);
   notifyMainWindow('clips-changed');
+  addAuditEntry('create', `Clip created: "${(clip.comment || '(screenshot)').slice(0, 50)}"`);
 
-  // AI categorization — runs if still uncategorized OR no project assigned
-  if ((clip.category === 'Uncategorized' || !clip.project_id) && (clip.comment || imageData) && ai.isEnabled()) {
+  // AI categorization — runs if clip has content and AI is enabled.
+  // Even if rules assigned a category/project, AI enriches with summary, tags, and fix prompts.
+  if ((clip.comment || imageData) && ai.isEnabled()) {
     console.log(`[Sciurus] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
     autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
       .catch(e => console.error('[Sciurus] Auto-categorize background error:', e.message));
+  } else if (!ai.isEnabled()) {
+    console.log('[Sciurus] AI disabled — skipping categorization');
   }
   return true;
 });
@@ -354,6 +362,8 @@ ipcMain.handle('update-clip', async (_, id, updates) => {
   if (typeof id !== 'string' || !updates) return false;
   const safe = sanitizeUpdates(updates);
   await db.updateClip(id, safe);
+  const fields = Object.keys(safe).join(', ');
+  addAuditEntry('update', `Clip ${id} updated: ${fields}`);
   notifyMainWindow('clips-changed');
   return true;
 });
@@ -361,6 +371,7 @@ ipcMain.handle('update-clip', async (_, id, updates) => {
 ipcMain.handle('delete-clip', async (_, id) => {
   if (typeof id !== 'string') return false;
   await db.deleteClip(id);
+  addAuditEntry('delete', `Clip trashed: ${id}`);
   notifyMainWindow('clips-changed');
   notifyMainWindow('projects-changed');
   return true;
@@ -402,8 +413,10 @@ ipcMain.handle('assign-clip-to-project', async (_, clipId, projectId) => {
   // Auto-generate fix prompt in background when assigning to a project
   if (projectId && ai.isEnabled()) {
     const clip = await db.getClip(clipId);
-    if (clip && clip.comment && !clip.aiFixPrompt) {
-      ai.summarizeNotes([{ id: clip.id, comment: clip.comment }]).then((results) => {
+    if (clip && (clip.comment || clip.image) && !clip.aiFixPrompt) {
+      const raw = images.loadImage(clipId);
+      const compressed = raw ? images.compressForAI(raw) : null;
+      ai.summarizeNotes([{ id: clip.id, comment: clip.comment || '', imageDataURL: compressed }]).then((results) => {
         if (results.length > 0 && results[0].summary) {
           db.updateClip(clipId, { aiFixPrompt: results[0].summary });
           notifyMainWindow('clips-changed');
@@ -421,8 +434,10 @@ ipcMain.handle('complete-clip', async (_, clipId, archive) => {
     // Archive option now sends to trash instead
     await db.updateClip(clipId, updates);
     await db.deleteClip(clipId);
+    addAuditEntry('complete', `Clip completed + trashed: ${clipId}`);
   } else {
     await db.updateClip(clipId, updates);
+    addAuditEntry('complete', `Clip completed: ${clipId}`);
   }
   notifyMainWindow('clips-changed');
   notifyMainWindow('projects-changed');
@@ -499,9 +514,18 @@ ipcMain.handle('has-api-key', () => ai.isEnabled());
 
 ipcMain.handle('summarize-project', async (_, projectId) => {
   const projectClips = await db.getClips(projectId);
-  const missing = projectClips.filter((c) => !c.aiFixPrompt && c.comment);
+  const missing = projectClips.filter((c) => !c.aiFixPrompt && (c.comment || c.image));
   if (missing.length > 0 && ai.isEnabled()) {
-    const generated = await ai.summarizeNotes(missing);
+    // Load and compress screenshots for each note so AI can analyze them
+    const notesWithImages = missing.map((c) => {
+      const raw = images.loadImage(c.id);
+      return {
+        id: c.id,
+        comment: c.comment || '',
+        imageDataURL: raw ? images.compressForAI(raw) : null,
+      };
+    });
+    const generated = await ai.summarizeNotes(notesWithImages);
     for (const item of generated) {
       const clip = projectClips.find((c) => c.id === item.id);
       if (clip && item.summary) {
@@ -555,6 +579,33 @@ ipcMain.handle('add-custom-block', async (_, label, text) => {
 ipcMain.handle('get-app-version', () => {
   const pkg = require('../package.json');
   return { version: pkg.version, electron: process.versions.electron, node: process.versions.node };
+});
+
+// ── Audit Ledger ──
+
+const MAX_AUDIT_ENTRIES = 200;
+let auditLog = [];
+
+async function loadAuditLog() {
+  try {
+    const stored = await db.getSettings('audit_log');
+    if (stored && Array.isArray(stored.entries)) {
+      auditLog = stored.entries;
+    }
+  } catch { /* first run — no log yet */ }
+}
+
+async function addAuditEntry(action, detail) {
+  auditLog.unshift({ ts: Date.now(), action, detail });
+  if (auditLog.length > MAX_AUDIT_ENTRIES) auditLog.length = MAX_AUDIT_ENTRIES;
+  await db.saveSetting('audit_log', { entries: auditLog });
+}
+
+ipcMain.handle('get-audit-log', () => auditLog);
+ipcMain.handle('clear-audit-log', async () => {
+  auditLog = [];
+  await db.saveSetting('audit_log', { entries: [] });
+  return true;
 });
 
 ipcMain.handle('get-db-backend', () => db.getBackendName());
@@ -761,6 +812,9 @@ async function launchMainApp() {
     console.log('[Sciurus] Custom prompt config loaded from settings');
   }
   retryUncategorized();
+
+  // Load audit log
+  await loadAuditLog();
 
   // Auto-purge trash items older than 30 days
   db.purgeTrash(30).then((n) => {

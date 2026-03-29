@@ -18,6 +18,8 @@ let showTrash = false;
 let trashClips = [];
 let aiMatchedIds = null;
 let searchQuery = '';
+let groupByCategory = false;
+let collapsedGroups = new Set();
 
 // Projects tab state
 let selectedProjectId = null;
@@ -198,6 +200,10 @@ function renderGeneralSidebar(el) {
     <option value="date-oldest" ${sortBy === 'date-oldest' ? 'selected' : ''}>Oldest First</option>
     <option value="tag-az" ${sortBy === 'tag-az' ? 'selected' : ''}>Tag A-Z</option>
   </select>`;
+
+  html += '<div class="sec" style="margin-top:12px">View</div>';
+  html += `<button class="sb-btn ${groupByCategory ? 'active' : ''}" onclick="toggleGroupBy()" title="Group notes under category headings">
+    &#x1F4C2; Group by Category</button>`;
 
   html += '<div class="sec" style="margin-top:12px">Trash</div>';
   html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
@@ -388,7 +394,7 @@ function renderContent() {
   if (showTrash) renderTrashContent(el);
   else if (activeTab === 'general') renderGeneralContent(el);
   else if (activeTab === 'projects') renderProjectsContent(el);
-  else if (activeTab === 'settings') { renderSettingsContent(el); loadPromptBlocks(); }
+  else if (activeTab === 'settings') { renderSettingsContent(el); loadPromptBlocks(); loadAuditLog(); }
   else if (activeTab === 'help') renderHelpContent(el);
 }
 
@@ -423,6 +429,27 @@ function renderGeneralContent(el) {
     html += `<div class="empty"><div class="ico">&#x26a1;</div>`
       + `<div class="empty-title">${isEmpty ? 'No notes yet' : 'No matches'}</div>`
       + `<div class="empty-sub">${isEmpty ? 'Take a screenshot — capture pops automatically' : 'Try a different search'}</div></div>`;
+  } else if (groupByCategory && filterCat === 'All') {
+    // Grouped view: clips arranged under category headings
+    const tags = getAllKnownTags();
+    const grouped = {};
+    filtered.forEach((c) => {
+      const cat = c.category || 'Uncategorized';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(c);
+    });
+    const sortedCats = Object.keys(grouped).sort((a, b) => a === 'Uncategorized' ? 1 : b === 'Uncategorized' ? -1 : a.localeCompare(b));
+    sortedCats.forEach((cat) => {
+      const isCollapsed = collapsedGroups.has(cat);
+      html += `<div class="group-header" onclick="toggleGroup('${escAttr(cat)}')">`;
+      html += `<span class="group-arrow">${isCollapsed ? '&#x25B6;' : '&#x25BC;'}</span>`;
+      html += `<span class="group-name">${esc(cat)}</span>`;
+      html += `<span class="group-count">${grouped[cat].length}</span>`;
+      html += `</div>`;
+      if (!isCollapsed) {
+        html += grouped[cat].map((c) => renderClipCard(c, false, tags)).join('');
+      }
+    });
   } else {
     const tags = getAllKnownTags();
     html += filtered.map((c) => renderClipCard(c, false, tags)).join('');
@@ -490,6 +517,17 @@ function setTag(tag) {
 
 function setSortBy(sort) {
   sortBy = sort;
+  renderAll();
+}
+
+function toggleGroupBy() {
+  groupByCategory = !groupByCategory;
+  renderAll();
+}
+
+function toggleGroup(cat) {
+  if (collapsedGroups.has(cat)) collapsedGroups.delete(cat);
+  else collapsedGroups.add(cat);
   renderAll();
 }
 
@@ -1116,6 +1154,15 @@ function renderSettingsContent(el) {
           <span class="setting-value">${projects.length}</span>
         </div>
       </div>
+
+      <div class="settings-section">
+        <h3>Activity Log</h3>
+        <p class="setting-desc" style="margin-bottom:8px">Recent changes — create, update, delete, AI categorization</p>
+        <div id="auditLogList" class="audit-log-list">Loading...</div>
+        <div class="prompt-actions" style="margin-top:8px">
+          <button type="button" class="btn-sm secondary" onclick="clearAuditLog()">Clear Log</button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -1234,6 +1281,28 @@ async function addCustomBlock() {
   renderPromptBlocks();
 }
 
+// ── Audit Ledger ──
+
+async function loadAuditLog() {
+  const el = document.getElementById('auditLogList');
+  if (!el) return;
+  const log = await window.quickclip.getAuditLog();
+  if (!log || log.length === 0) {
+    el.innerHTML = '<div class="audit-empty">No activity recorded yet</div>';
+    return;
+  }
+  el.innerHTML = log.slice(0, 50).map(entry => {
+    const icon = { create: '&#x2795;', delete: '&#x1F5D1;', update: '&#x270E;', complete: '&#x2713;', ai: '&#x2728;' }[entry.action] || '&#x25CF;';
+    return `<div class="audit-entry"><span class="audit-icon">${icon}</span><span class="audit-detail">${esc(entry.detail)}</span><span class="audit-time">${timeAgo(entry.ts)}</span></div>`;
+  }).join('');
+}
+
+async function clearAuditLog() {
+  await window.quickclip.clearAuditLog();
+  const el = document.getElementById('auditLogList');
+  if (el) el.innerHTML = '<div class="audit-empty">Log cleared</div>';
+}
+
 // =====================================================================
 //  CLIP CARD
 // =====================================================================
@@ -1280,9 +1349,14 @@ function renderClipCard(c, inProject, allKnownTags) {
   html += `<div class="clip-actions">`;
   html += `<span class="clip-time">${timeAgo(c.timestamp)}</span>`;
 
+  // Copy note text button
+  if (c.comment) {
+    html += `<button class="copy-note-btn" onclick="copyNoteText('${id}')" title="Copy note text + screenshot to clipboard">&#x1F4CB; Note</button>`;
+  }
+
   // Copy prompt button (if aiFixPrompt exists)
   if (c.aiFixPrompt) {
-    html += `<button class="copy-prompt-btn" onclick="copyPrompt('${id}')" title="Copy AI fix prompt to clipboard">&#x1F4CB; Copy</button>`;
+    html += `<button class="copy-prompt-btn" onclick="copyPrompt('${id}')" title="Copy AI fix prompt to clipboard">&#x1F4CB; Prompt</button>`;
   }
 
   // Manual AI trigger (if has comment but no AI summary, or no aiFixPrompt)
@@ -1355,8 +1429,14 @@ function renderClipCard(c, inProject, allKnownTags) {
   // Thread comments
   if (c.comments && c.comments.length) {
     html += `<div class="thread">`;
-    c.comments.forEach((x) => {
-      html += `<div class="thread-item">${esc(x.text)} <span class="ts">— ${timeAgo(x.ts)}</span></div>`;
+    c.comments.forEach((x, idx) => {
+      html += `<div class="thread-item" id="thread-${id}-${idx}">`;
+      html += `<span class="thread-text">${esc(x.text)}</span> <span class="ts">— ${timeAgo(x.ts)}</span>`;
+      html += `<span class="thread-actions">`;
+      html += `<button class="thread-edit-btn" onclick="editComment('${id}', ${idx})" title="Edit comment">&#x270E;</button>`;
+      html += `<button class="thread-del-btn" onclick="deleteComment('${id}', ${idx})" title="Delete comment">&times;</button>`;
+      html += `</span>`;
+      html += `</div>`;
     });
     html += `</div>`;
   }
@@ -1364,7 +1444,7 @@ function renderClipCard(c, inProject, allKnownTags) {
   // Add comment input
   html += `<button class="add-comment-btn" onclick="showCommentInput('${id}')" title="Add a follow-up note to this clip">+ Comment</button>`;
   html += `<div id="ci-${id}" style="display:none;margin-top:6px">`;
-  html += `<input class="comment-input" id="cin-${id}" placeholder="Add a thought..." `
+  html += `<input class="comment-input" id="cin-${id}" placeholder="Add a thought..." spellcheck="true" `
     + `onkeydown="if(event.key==='Enter')addComment('${id}');if(event.key==='Escape')hideCommentInput('${id}')" />`;
   html += `</div></div>`;
 
@@ -1501,6 +1581,80 @@ async function addComment(id) {
   input.value = '';
   hideCommentInput(id);
   renderAll();
+}
+
+function editComment(clipId, idx) {
+  const clip = clips.find((c) => c.id === clipId);
+  if (!clip || !clip.comments || !clip.comments[idx]) return;
+  const el = document.getElementById(`thread-${escAttr(clipId)}-${idx}`);
+  if (!el) return;
+  const textSpan = el.querySelector('.thread-text');
+  if (!textSpan) return;
+  const oldText = clip.comments[idx].text;
+  el.innerHTML = `<input class="comment-input thread-edit-input" value="${escAttr(oldText)}" `
+    + `onkeydown="if(event.key==='Enter')saveEditComment('${escAttr(clipId)}',${idx},this.value);if(event.key==='Escape')renderAll()" />`
+    + `<button class="thread-save-btn" onclick="saveEditComment('${escAttr(clipId)}',${idx},this.previousElementSibling.value)">&#x2713;</button>`;
+  el.querySelector('input').focus();
+}
+
+async function saveEditComment(clipId, idx, newText) {
+  newText = (newText || '').trim();
+  if (!newText) return;
+  const clip = clips.find((c) => c.id === clipId);
+  if (!clip || !clip.comments || !clip.comments[idx]) return;
+  clip.comments[idx].text = newText;
+  await window.quickclip.updateClip(clipId, { comments: clip.comments });
+  renderAll();
+}
+
+async function deleteComment(clipId, idx) {
+  const clip = clips.find((c) => c.id === clipId);
+  if (!clip || !clip.comments || !clip.comments[idx]) return;
+  clip.comments.splice(idx, 1);
+  await window.quickclip.updateClip(clipId, { comments: clip.comments });
+  renderAll();
+}
+
+async function copyNoteText(id) {
+  const clip = clips.find(c => c.id === id);
+  if (!clip) return;
+
+  // Gather all note + AI-generated text
+  const parts = [];
+  if (clip.comment) parts.push(clip.comment);
+  if (clip.aiSummary) parts.push(`AI Summary: ${clip.aiSummary}`);
+  if (clip.aiFixPrompt) parts.push(`AI Prompt:\n${clip.aiFixPrompt}`);
+  const text = parts.join('\n\n');
+  if (!text) return;
+
+  // Get screenshot data URL
+  let imageDataUrl = null;
+  if (clip.image === '__on_disk__') {
+    imageDataUrl = await window.quickclip.getClipImage(id);
+  } else if (clip.image) {
+    imageDataUrl = clip.image;
+  }
+
+  // Write text + image to clipboard together
+  if (imageDataUrl) {
+    try {
+      const resp = await fetch(imageDataUrl);
+      const blob = await resp.blob();
+      const pngBlob = blob.type === 'image/png'
+        ? blob
+        : new Blob([await blob.arrayBuffer()], { type: 'image/png' });
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+          'image/png': pngBlob,
+        })
+      ]);
+    } catch {
+      await navigator.clipboard.writeText(text);
+    }
+  } else {
+    await navigator.clipboard.writeText(text);
+  }
 }
 
 // ── Tag Management ──

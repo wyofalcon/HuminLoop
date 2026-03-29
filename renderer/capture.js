@@ -182,3 +182,21 @@ async function save() {
 function closeWin() {
   window.quickclip.closeCapture();
 }
+
+function triggerUpload() {
+  document.getElementById('photoUpload').click();
+}
+
+function handleUpload(event) {
+  const file = event.target.files[0];
+  if (!file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    screenshotData = reader.result;
+    document.getElementById('ssImg').src = reader.result;
+    document.getElementById('ssImg').classList.remove('hidden');
+    document.getElementById('emptyImg').classList.add('hidden');
+    updateSaveBtn();
+  };
+  reader.readAsDataURL(file);
+}

@@ -24,13 +24,16 @@ to context-switch between your app, your terminal, and a notes doc.
 
 ## How It Works
 
-1. Press `Ctrl+Shift+Q` (or your MX Master button)
-2. Capture popup appears with screenshot preview
-3. **Window context auto-captured** — active window title + process name grabbed before the popup opens
-4. Type a quick note, optionally pick a category + project
-5. **Rule engine runs first** — auto-matches project by repo path and window title
-6. **AI fallback** — Gemini 2.5 Flash analyzes the screenshot + note if rules didn't categorize
-7. Browse, search, and manage clips in the tabbed notes viewer
+1. Take a screenshot with **Windows Snipping Tool** (`Ctrl+Win+S`) — or any tool that copies to clipboard
+2. Sciurus **auto-detects** the new screenshot via clipboard watcher (1s polling)
+3. Capture popup appears with screenshot preview
+4. **Window context auto-captured** — active window title + process name grabbed before the popup opens
+5. Type a quick note, optionally pick a category + project
+6. **Rule engine runs first** — auto-matches project by repo path and window title
+7. **AI fallback** — Gemini 2.5 Flash analyzes the screenshot + note if rules didn't categorize
+8. Browse, search, and manage clips in the tabbed notes viewer
+
+> **Backup hotkey:** `Ctrl+Shift+Q` also opens the capture popup with whatever is currently on the clipboard (configurable via `HOTKEY_COMBO` in `.env`).
 
 ## Features
 
@@ -235,7 +238,7 @@ cp .env.example .env
 | `POSTGRES_PASSWORD` | `sciurus_dev` | PostgreSQL password |
 | `AI_AUTH_MODE` | `auto` | `apikey`, `vertex`, or `auto` |
 | `GEMINI_API_KEY` | — | Gemini API key (for `apikey` mode) |
-| `HOTKEY_COMBO` | `ctrl+shift+q` | Global hotkey for capture |
+| `HOTKEY_COMBO` | `ctrl+shift+q` | Backup hotkey for manual capture (primary: clipboard watcher) |
 | `SCIURUS_DEV` | — | Set to `1` to open DevTools on launch |
 
 ---
@@ -286,10 +289,13 @@ When you save a clip, Sciurus tries to categorize it in this order:
 
 1. **Your manual selection** — always wins
 2. **Repo path auto-match** — if the window title contains a project's repo folder name
-3. **Window rules** — custom pattern matching on window title or process name
-4. **AI fallback** — Gemini analyzes the screenshot + note + window context
+3. **User window rules** — custom pattern matching on window title or process name
+4. **Process map** — built-in process→category lookup (e.g. `code` → Dev Tools, `chrome` → Web)
+5. **Title keywords** — matches known terms in the window title
+6. **Comment keywords** — matches known terms in the user's note
+7. **AI fallback** — Gemini analyzes the screenshot + note + window context
 
-Most clips get categorized instantly by rules 2-3, no AI call needed.
+Most clips get categorized instantly by rules 2-6, no AI call needed.
 
 ---
 
@@ -408,12 +414,13 @@ On Wayland + GNOME, `gdbus` is used automatically. Other Wayland compositors are
 
 ---
 
-## Tip: One-Button Capture
+## Tip: Effortless Capture
 
 Sciurus works best when capturing is effortless — one press, no thinking.
-Map `Ctrl+Shift+Q` to a spare mouse button or macro key so you can stash
-a thought without breaking flow. Works great with PowerToys Zoom Draw
-for annotating screenshots with colored markers before capture.
+Hit `Ctrl+Win+S` to open Windows Snipping Tool, select a region, and
+Sciurus picks it up automatically from the clipboard. Annotate screenshots
+with PowerToys ZoomIt (colored markers: red = bug, green = approved,
+pink = question) before or after snipping — the AI reads your annotations.
 
 ---
 

@@ -1395,13 +1395,13 @@ function renderClipCard(c, inProject, allKnownTags) {
   }
 
   // Comment
-  if (c.comment) html += `<div class="comment">${esc(c.comment)}</div>`;
+  if (c.comment) html += `<div class="comment copyable" onclick="copyInline(this, 'comment', '${id}')">${esc(c.comment)}<span class="copy-hint" title="Click to copy comment">&#x1F4CB;</span></div>`;
 
   // AI summary (filing label)
-  if (c.aiSummary) html += `<div class="ai-summary" title="AI-generated summary"><span class="ai-label">AI Summary</span> ${esc(c.aiSummary)}</div>`;
+  if (c.aiSummary) html += `<div class="ai-summary copyable" onclick="copyInline(this, 'aiSummary', '${id}')"><span class="ai-label">AI Summary</span> ${esc(c.aiSummary)}<span class="copy-hint" title="Click to copy AI summary">&#x1F4CB;</span></div>`;
 
   // AI fix prompt inline (actionable prompt for IDE injection)
-  if (c.aiFixPrompt) html += `<div class="ai-fix-prompt" title="AI-generated fix prompt — paste into your IDE's AI helper"><span class="ai-label">AI Prompt</span> ${esc(c.aiFixPrompt)}</div>`;
+  if (c.aiFixPrompt) html += `<div class="ai-fix-prompt copyable" onclick="copyInline(this, 'aiFixPrompt', '${id}')"><span class="ai-label">AI Prompt</span> ${esc(c.aiFixPrompt)}<span class="copy-hint" title="Click to copy AI prompt">&#x1F4CB;</span></div>`;
 
   // Completed timestamp
   if (isCompleted) {
@@ -1412,6 +1412,7 @@ function renderClipCard(c, inProject, allKnownTags) {
   html += `<div class="tags-row">`;
   if (c.tags && c.tags.length) {
     html += c.tags.map((t) => `<span class="tag">#${esc(t)}<button class="tag-remove" onclick="removeTag('${id}','${escAttr(t)}')" title="Remove tag">&times;</button></span>`).join('');
+    html += `<span class="copy-hint tag-copy" onclick="event.stopPropagation(); copyTags('${id}')" title="Click to copy all tags">&#x1F4CB;</span>`;
   }
   html += `<button class="add-tag-btn" onclick="showTagInput('${id}')" title="Add a tag">+ Tag</button>`;
   html += `</div>`;
@@ -1533,6 +1534,25 @@ async function copyPrompt(id) {
   if (clip && clip.aiFixPrompt) {
     await navigator.clipboard.writeText(clip.aiFixPrompt);
   }
+}
+
+async function copyInline(el, field, id) {
+  const clip = clips.find(c => c.id === id);
+  if (!clip) return;
+  const text = field === 'comment' ? clip.comment : field === 'aiSummary' ? clip.aiSummary : clip.aiFixPrompt;
+  if (!text) return;
+  await navigator.clipboard.writeText(text);
+  el.classList.add('copy-flash');
+  setTimeout(() => el.classList.remove('copy-flash'), 600);
+}
+
+async function copyTags(id) {
+  const clip = clips.find(c => c.id === id);
+  if (!clip || !clip.tags || !clip.tags.length) return;
+  await navigator.clipboard.writeText(clip.tags.map(t => '#' + t).join(' '));
+  const row = document.querySelector(`#ci-${id}`)?.previousElementSibling || document.querySelector(`.tags-row`);
+  const hint = document.querySelector(`[onclick="event.stopPropagation(); copyTags('${id}')"]`);
+  if (hint) { hint.classList.add('copy-flash'); setTimeout(() => hint.classList.remove('copy-flash'), 600); }
 }
 
 async function retriggerAi(id) {

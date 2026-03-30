@@ -3,7 +3,9 @@ credentials.json
 token.json
 node_modules/
 dist/
+dist2/
 out/
+Notes/
 *.pyc
 __pycache__/
 screenshots/

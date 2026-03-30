@@ -1,0 +1,13 @@
+{
+  "name": "sciurus-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Sciurus — AI-powered knowledge capture + dev workflow",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  }
+}

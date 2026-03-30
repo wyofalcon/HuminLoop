@@ -839,6 +839,10 @@ async function launchMainApp() {
   // Load audit log
   await loadAuditLog();
 
+  // Start local HTTP API for MCP server / external tool access
+  const { startApiServer } = require('./api-server');
+  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry });
+
   // Auto-purge trash items older than 30 days
   db.purgeTrash(30).then((n) => {
     if (n > 0) console.log(`[Sciurus] Purged ${n} old trashed clip(s)`);

@@ -19,7 +19,10 @@ const path = require('path');
 // ── Config ──
 
 const API_PORT = process.env.SCIURUS_API_PORT || '7277';
-const API_HOST = process.env.SCIURUS_API_HOST || '127.0.0.1';
+const IS_CONTAINER = process.env.REMOTE_CONTAINERS === 'true'
+  || process.env.CODESPACES === 'true'
+  || require('fs').existsSync('/.dockerenv');
+const API_HOST = process.env.SCIURUS_API_HOST || (IS_CONTAINER ? 'host.docker.internal' : '127.0.0.1');
 const API_BASE = `http://${API_HOST}:${API_PORT}`;
 const PROJECT_ROOT = process.env.SCIURUS_PROJECT_ROOT
   || (() => { try { return execSync('git rev-parse --show-toplevel', { encoding: 'utf-8' }).trim(); } catch { return process.cwd(); } })();

@@ -24,6 +24,12 @@ let collapsedGroups = new Set();
 // Projects tab state
 let selectedProjectId = null;
 
+// Workflow tab state
+let workflowStatus = null;
+let workflowChangelog = null;
+let workflowPrompts = [];
+let workflowSection = 'status';
+
 // ── Init ──
 
 (async () => {
@@ -141,6 +147,9 @@ function updateStatusBar() {
     sub.textContent = `${trashClips.length} trashed note${trashClips.length !== 1 ? 's' : ''}`;
   } else if (activeTab === 'help') {
     sub.textContent = 'Help — how to use Sciurus';
+  } else if (activeTab === 'workflow') {
+    const mode = workflowStatus?.relayMode || '?';
+    sub.textContent = `AI Dev Workflow · relay: ${mode}`;
   } else {
     sub.textContent = 'App settings';
   }
@@ -156,6 +165,7 @@ function renderSidebar() {
   else if (activeTab === 'projects') renderProjectsSidebar(el);
   else if (activeTab === 'settings') renderSettingsSidebar(el);
   else if (activeTab === 'help') renderHelpSidebar(el);
+  else if (activeTab === 'workflow') renderWorkflowSidebar(el);
 }
 
 function renderGeneralSidebar(el) {
@@ -386,6 +396,119 @@ function renderHelpContent(el) {
 }
 
 // =====================================================================
+//  WORKFLOW TAB
+// =====================================================================
+
+async function loadWorkflowData() {
+  [workflowStatus, workflowChangelog, workflowPrompts] = await Promise.all([
+    window.quickclip.getWorkflowStatus(),
+    window.quickclip.getWorkflowChangelog(),
+    window.quickclip.getWorkflowPrompts(),
+  ]);
+}
+
+function renderWorkflowSidebar(el) {
+  const sections = [
+    { id: 'status', label: 'Status' },
+    { id: 'prompts', label: 'Prompts' },
+    { id: 'session', label: 'Session' },
+    { id: 'changelog', label: 'Changelog' },
+  ];
+  let html = '<div class="sec">Workflow</div>';
+  sections.forEach((s) => {
+    html += `<button class="sb-btn${workflowSection === s.id ? ' active' : ''}" onclick="workflowSection='${s.id}';renderAll()">${esc(s.label)}</button>`;
+  });
+  el.innerHTML = html;
+}
+
+function renderWorkflowContent(el) {
+  if (!workflowStatus || !workflowStatus.hasWorkflow) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Workflow Found</h2><p>No <code>.ai-workflow/</code> directory detected in this project.</p></div>';
+    return;
+  }
+  if (workflowSection === 'status') renderWorkflowStatus(el);
+  else if (workflowSection === 'prompts') renderWorkflowPrompts(el);
+  else if (workflowSection === 'session') renderWorkflowSession(el);
+  else if (workflowSection === 'changelog') renderWorkflowChangelog(el);
+}
+
+function renderWorkflowStatus(el) {
+  const s = workflowStatus;
+  const relayClass = s.relayMode === 'auto' ? 'wf-badge-green' : 'wf-badge-yellow';
+  const auditClass = s.auditMode === 'on' ? 'wf-badge-green' : 'wf-badge-yellow';
+  const pendingCount = workflowPrompts.filter((p) => p.status === 'CRAFTED' || p.status === 'SENT' || p.status === 'BUILDING').length;
+  const doneCount = workflowPrompts.filter((p) => p.status === 'DONE').length;
+
+  el.innerHTML = `
+    <div class="wf-status-grid">
+      <div class="wf-card">
+        <div class="wf-card-label">Relay Mode</div>
+        <div class="wf-card-value"><span class="wf-badge ${relayClass}">${esc(s.relayMode)}</span></div>
+      </div>
+      <div class="wf-card">
+        <div class="wf-card-label">Audit Watch</div>
+        <div class="wf-card-value"><span class="wf-badge ${auditClass}">${esc(s.auditMode)}</span></div>
+      </div>
+      <div class="wf-card">
+        <div class="wf-card-label">Pending Prompts</div>
+        <div class="wf-card-value wf-card-num">${pendingCount}</div>
+      </div>
+      <div class="wf-card">
+        <div class="wf-card-label">Completed Prompts</div>
+        <div class="wf-card-value wf-card-num">${doneCount}</div>
+      </div>
+    </div>
+    <div class="wf-section">
+      <h3>Agent Roles</h3>
+      <table class="wf-roles-table">
+        <tr><th>Role</th><th>Model</th><th>Purpose</th></tr>
+        <tr><td>Architect</td><td>Sonnet 4.6</td><td>Orchestrates, refines prompts, manages git</td></tr>
+        <tr><td>Builder</td><td>Opus 4.6</td><td>Writes all application code</td></tr>
+        <tr><td>Reviewer</td><td>Gemini 3.1 Pro</td><td>Audits diffs, structured JSON verdicts</td></tr>
+        <tr><td>Screener</td><td>Gemini 2.0 Flash</td><td>Pre-commit AI analysis</td></tr>
+      </table>
+    </div>
+  `;
+}
+
+function renderWorkflowPrompts(el) {
+  if (!workflowPrompts.length) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Prompts Yet</h2><p>Prompt tracking starts when the Architect generates prompt IDs.</p></div>';
+    return;
+  }
+  let html = '<div class="wf-prompt-list">';
+  workflowPrompts.forEach((p) => {
+    const statusClass = p.status === 'DONE' ? 'wf-badge-green' : p.status === 'FAILED' ? 'wf-badge-red' : 'wf-badge-yellow';
+    const typeLabel = p.type === 'DIRECT' ? '<span class="wf-badge wf-badge-dim">direct</span> ' : '';
+    html += `<div class="wf-prompt-row">
+      <span class="wf-prompt-id">${esc(p.id)}</span>
+      ${typeLabel}<span class="wf-badge ${statusClass}">${esc(p.status)}</span>
+      <span class="wf-prompt-desc">${esc(p.description || '')}</span>
+      <span class="wf-prompt-time">${p.timestamp ? esc(p.timestamp) : ''}</span>
+    </div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function renderWorkflowSession(el) {
+  const session = workflowStatus?.session;
+  if (!session) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Session</h2><p>SESSION.md not found.</p></div>';
+    return;
+  }
+  el.innerHTML = `<div class="wf-markdown"><pre>${esc(session)}</pre></div>`;
+}
+
+function renderWorkflowChangelog(el) {
+  if (!workflowChangelog) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Changelog</h2><p>CHANGELOG.md not found.</p></div>';
+    return;
+  }
+  el.innerHTML = `<div class="wf-markdown"><pre>${esc(workflowChangelog)}</pre></div>`;
+}
+
+// =====================================================================
 //  MAIN CONTENT
 // =====================================================================
 
@@ -396,6 +519,7 @@ function renderContent() {
   else if (activeTab === 'projects') renderProjectsContent(el);
   else if (activeTab === 'settings') { renderSettingsContent(el); loadPromptBlocks(); loadAuditLog(); }
   else if (activeTab === 'help') renderHelpContent(el);
+  else if (activeTab === 'workflow') { loadWorkflowData().then(() => renderWorkflowContent(el)); }
 }
 
 // ── General Notes ──

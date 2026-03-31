@@ -55,6 +55,11 @@ contextBridge.exposeInMainWorld('quickclip', {
   getAuditLog: () => ipcRenderer.invoke('get-audit-log'),
   clearAuditLog: () => ipcRenderer.invoke('clear-audit-log'),
 
+  // Workflow
+  getWorkflowStatus: () => ipcRenderer.invoke('get-workflow-status'),
+  getWorkflowChangelog: () => ipcRenderer.invoke('get-workflow-changelog'),
+  getWorkflowPrompts: () => ipcRenderer.invoke('get-workflow-prompts'),
+
   // App info
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 

@@ -644,6 +644,37 @@ ipcMain.handle('retrigger-ai', async (_, clipId) => {
   return true;
 });
 
+// ── IPC Handlers: Workflow ──
+
+ipcMain.handle('get-workflow-status', async () => {
+  const workflowDir = path.join(__dirname, '..', '.ai-workflow');
+  const contextDir = path.join(workflowDir, 'context');
+  const read = (f) => { try { return fs.readFileSync(path.join(contextDir, f), 'utf8').trim(); } catch { return null; } };
+  return {
+    relayMode: read('RELAY_MODE') || 'review',
+    auditMode: read('AUDIT_WATCH_MODE') || 'off',
+    session: read('SESSION.md'),
+    hasWorkflow: fs.existsSync(workflowDir),
+  };
+});
+
+ipcMain.handle('get-workflow-changelog', async () => {
+  const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'CHANGELOG.md');
+  try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+});
+
+ipcMain.handle('get-workflow-prompts', async () => {
+  const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  try {
+    const raw = fs.readFileSync(p, 'utf8').trim();
+    if (!raw) return [];
+    return raw.split('\n').map((line) => {
+      const parts = line.split('|');
+      return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3], type: parts[4] || 'CRAFTED', parentId: parts[5] || null };
+    }).reverse();
+  } catch { return []; }
+});
+
 // ── IPC Handlers: Window Controls ──
 
 ipcMain.on('close-capture', () => {

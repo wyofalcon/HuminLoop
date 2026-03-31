@@ -9,6 +9,8 @@
  */
 
 const http = require('http');
+const path = require('path');
+const fs = require('fs');
 const { URL } = require('url');
 
 const PORT = parseInt(process.env.SCIURUS_API_PORT || '7277', 10);
@@ -286,6 +288,39 @@ function startApiServer(deps) {
           aiFixPrompt: c.aiFixPrompt || '', category: c.category || '',
           tags: c.tags || [], timestamp: c.timestamp, summarizeCount: c.summarizeCount || 0,
         })));
+      }
+
+      // ── Workflow ──
+
+      if (method === 'GET' && pathname === '/api/workflow/status') {
+        const workflowDir = path.join(__dirname, '..', '.ai-workflow');
+        const contextDir = path.join(workflowDir, 'context');
+        const read = (f) => { try { return fs.readFileSync(path.join(contextDir, f), 'utf8').trim(); } catch { return null; } };
+        return json(res, {
+          relayMode: read('RELAY_MODE') || 'review',
+          auditMode: read('AUDIT_WATCH_MODE') || 'off',
+          session: read('SESSION.md'),
+          hasWorkflow: fs.existsSync(workflowDir),
+        });
+      }
+
+      if (method === 'GET' && pathname === '/api/workflow/changelog') {
+        const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'CHANGELOG.md');
+        try { return json(res, { content: fs.readFileSync(p, 'utf8') }); }
+        catch { return json(res, { content: null }); }
+      }
+
+      if (method === 'GET' && pathname === '/api/workflow/prompts') {
+        const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+        try {
+          const raw = fs.readFileSync(p, 'utf8').trim();
+          if (!raw) return json(res, []);
+          const prompts = raw.split('\n').map((line) => {
+            const parts = line.split('|');
+            return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3], type: parts[4] || 'CRAFTED', parentId: parts[5] || null };
+          }).reverse();
+          return json(res, prompts);
+        } catch { return json(res, []); }
       }
 
       // ── 404 ──

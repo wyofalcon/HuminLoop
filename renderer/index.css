@@ -1161,6 +1161,81 @@ kbd {
 }
 .help-table td:first-child { width: 160px; }
 
+/* ── Workflow Tab ── */
+
+.wf-empty { padding: 40px 20px; text-align: center; color: var(--text-dim); }
+.wf-empty h2 { color: var(--text-primary); margin-bottom: 8px; font-size: 18px; }
+.wf-empty p { font-size: 13px; }
+.wf-empty code { background: var(--bg-card); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
+.wf-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+.wf-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 16px;
+}
+.wf-card-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.wf-card-value { font-size: 14px; color: var(--text-primary); }
+.wf-card-num { font-size: 28px; font-weight: 700; font-family: monospace; }
+
+.wf-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.wf-badge-green { background: #10b98120; color: #34d399; }
+.wf-badge-yellow { background: #f59e0b20; color: #fbbf24; }
+.wf-badge-red { background: #ef444420; color: #f87171; }
+.wf-badge-dim { background: var(--bg-card); color: var(--text-dim); }
+
+.wf-section { padding: 0 16px 16px; }
+.wf-section h3 { font-size: 14px; color: var(--text-primary); margin-bottom: 10px; }
+
+.wf-roles-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.wf-roles-table th { text-align: left; padding: 6px 10px; color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid var(--border-light); }
+.wf-roles-table td { padding: 8px 10px; color: var(--text-primary); border-bottom: 1px solid var(--border-light); }
+.wf-roles-table tr:hover td { background: var(--bg-hover); }
+
+.wf-prompt-list { padding: 12px 16px; }
+.wf-prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 13px;
+}
+.wf-prompt-row:hover { background: var(--bg-hover); }
+.wf-prompt-id { font-family: monospace; font-size: 12px; color: var(--accent-blue); min-width: 160px; }
+.wf-prompt-desc { flex: 1; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-prompt-time { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+
+.wf-markdown {
+  padding: 16px;
+}
+.wf-markdown pre {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 /* ── Project Summary Panel ── */
 
 .summary-loading {

@@ -204,7 +204,7 @@ async function createToolbarWindow() {
   let y = 10;
   // Restore saved position if available
   try {
-    const savedPos = await db.getSetting('toolbar_position');
+    const savedPos = await db.getSettings('toolbar_position');
     if (savedPos && typeof savedPos.x === 'number' && typeof savedPos.y === 'number') {
       x = savedPos.x;
       y = savedPos.y;

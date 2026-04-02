@@ -276,6 +276,131 @@ ipcMain.handle('get-toolbar-project', async () => {
   }
 });
 
+// ── Draw Overlay ──
+
+function createOverlayWindow() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.focus();
+    return;
+  }
+  const display = screen.getPrimaryDisplay();
+  overlayWindow = new BrowserWindow({
+    x: display.bounds.x,
+    y: display.bounds.y,
+    width: display.bounds.width,
+    height: display.bounds.height,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    fullscreenable: true,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  overlayWindow.loadFile(path.join(__dirname, '..', 'renderer', 'overlay.html'));
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  overlayWindow.setFullScreen(true);
+  // Prevent the overlay from being ignored by the WM
+  overlayWindow.setIgnoreMouseEvents(false);
+
+  overlayWindow.on('closed', () => {
+    overlayWindow = null;
+    if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+      toolbarWindow.webContents.send('draw-mode-exited');
+    }
+  });
+}
+
+function destroyOverlayWindow() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.destroy();
+    overlayWindow = null;
+  }
+}
+
+ipcMain.handle('enter-draw-mode', (_, color) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    // Overlay already open — just switch color
+    overlayWindow.webContents.send('set-color', color);
+    return;
+  }
+  // Capture window metadata BEFORE overlay covers the screen
+  preOverlayWindowMeta = getActiveWindow();
+  createOverlayWindow();
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.once('did-finish-load', () => {
+      overlayWindow.webContents.send('set-color', color);
+    });
+  }
+});
+
+ipcMain.handle('exit-draw-mode', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.webContents.send('draw-mode-exited');
+  }
+  destroyOverlayWindow();
+  preOverlayWindowMeta = null;
+});
+
+ipcMain.handle('take-snippet', async () => {
+  // Capture window metadata before anything else
+  if (!preOverlayWindowMeta) {
+    preOverlayWindowMeta = getActiveWindow();
+  }
+
+  // Hide overlay if it exists (so it's not in the screenshot)
+  const hadOverlay = overlayWindow && !overlayWindow.isDestroyed();
+  if (hadOverlay) {
+    overlayWindow.hide();
+  }
+
+  // Small delay to let windows hide
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: screen.getPrimaryDisplay().size,
+  });
+
+  if (sources.length === 0) {
+    if (hadOverlay && overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.show();
+      overlayWindow.setFullScreen(true);
+    }
+    return;
+  }
+  const screenshot = sources[0].thumbnail.toDataURL();
+
+  if (hadOverlay && overlayWindow && !overlayWindow.isDestroyed()) {
+    // Existing overlay — switch to region select with annotations preserved
+    overlayWindow.show();
+    overlayWindow.setFullScreen(true);
+    overlayWindow.webContents.send('enter-region-select', screenshot);
+  } else {
+    // No overlay — create one and go straight to region select
+    createOverlayWindow();
+    overlayWindow.webContents.once('did-finish-load', () => {
+      overlayWindow.webContents.send('enter-region-select', screenshot);
+    });
+  }
+});
+
+ipcMain.handle('snippet-captured', (_, dataUrl) => {
+  // Destroy the overlay
+  destroyOverlayWindow();
+
+  // Send the snippet to the capture popup (same flow as clipboard watcher)
+  const meta = preOverlayWindowMeta || { title: 'Screen Capture', processName: 'Sciurus Toolbar' };
+  preOverlayWindowMeta = null;
+  createCaptureWindow(dataUrl, meta);
+});
+
 // ── Clipboard Watcher ──
 
 function startClipboardWatcher() {

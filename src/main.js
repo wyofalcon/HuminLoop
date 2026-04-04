@@ -652,13 +652,14 @@ ipcMain.handle('save-clip', async (_, clip) => {
   // AI categorization — runs if clip has content and AI is enabled.
   // Even if rules assigned a category/project, AI enriches with summary, tags, and fix prompts.
   if ((clip.comment || imageData) && ai.isEnabled()) {
+    console.log(`[Sciurus] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
+    // Always run standard categorization (summary, tags, category)
+    autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
+      .catch(e => console.error('[Sciurus] Auto-categorize background error:', e.message));
+    // In lite mode, also generate the focused fix prompt
     if (mode === 'lite') {
       autoCategorizeLite(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
         .catch(e => console.error('[Sciurus] Lite prompt background error:', e.message));
-    } else {
-      console.log(`[Sciurus] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
-      autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
-        .catch(e => console.error('[Sciurus] Auto-categorize background error:', e.message));
     }
   } else if (!ai.isEnabled()) {
     console.log('[Sciurus] AI disabled — skipping categorization');

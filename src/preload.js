@@ -95,6 +95,12 @@ contextBridge.exposeInMainWorld('quickclip', {
   onClipsChanged: (cb) => ipcRenderer.on('clips-changed', () => cb()),
   onProjectsChanged: (cb) => ipcRenderer.on('projects-changed', () => cb()),
 
+  // App mode
+  toggleAppMode: () => ipcRenderer.invoke('toggle-app-mode'),
+  getAppMode: () => ipcRenderer.invoke('get-app-mode'),
+  getLiteClips: () => ipcRenderer.invoke('get-lite-clips'),
+  setLiteActiveProject: (projectId) => ipcRenderer.invoke('set-lite-active-project', projectId),
+
   // Setup wizard
   checkDocker: () => ipcRenderer.invoke('setup-check-docker'),
   checkDb: () => ipcRenderer.invoke('setup-check-db'),

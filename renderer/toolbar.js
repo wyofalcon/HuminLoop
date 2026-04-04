@@ -23,6 +23,7 @@ async function loadProjectName() {
 
 let drawModeActive = false;
 let activeDrawColor = null;
+let textModeActive = false;
 
 function switchColor(color) {
   activeDrawColor = color;
@@ -49,6 +50,22 @@ window.quickclip.onDrawModeExited(() => {
   drawModeActive = false;
   activeDrawColor = null;
   updateColorDots();
+  // Also reset text mode if draw mode fully exits
+  textModeActive = false;
+  document.getElementById('textBtn').classList.remove('active');
+});
+
+// ── Text Mode ──
+
+function toggleTextMode() {
+  textModeActive = !textModeActive;
+  document.getElementById('textBtn').classList.toggle('active', textModeActive);
+  window.quickclip.toggleTextMode(textModeActive);
+}
+
+window.quickclip.onTextModeExited(() => {
+  textModeActive = false;
+  document.getElementById('textBtn').classList.remove('active');
 });
 
 // ── Actions ──

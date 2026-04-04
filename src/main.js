@@ -349,6 +349,26 @@ ipcMain.handle('exit-draw-mode', () => {
   preOverlayWindowMeta = null;
 });
 
+// ── Text Mode IPC Relay ──
+
+ipcMain.on('toggle-text-mode', (_, enabled) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('text-mode-toggle', enabled);
+  }
+});
+
+ipcMain.on('text-mode-changed', (_, enabled) => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    if (!enabled) toolbarWindow.webContents.send('text-mode-exited');
+  }
+});
+
+ipcMain.on('text-mode-exited', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.webContents.send('text-mode-exited');
+  }
+});
+
 ipcMain.handle('take-snippet', async () => {
   // Capture window metadata before anything else
   if (!preOverlayWindowMeta) {

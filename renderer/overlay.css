@@ -52,3 +52,20 @@ body {
 }
 
 .hidden { display: none !important; }
+
+/* ── Text Annotation Cursor ── */
+
+.text-cursor {
+  position: fixed;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 16px;
+  font-weight: bold;
+  color: #ff0000;
+  pointer-events: none;
+  z-index: 5;
+  white-space: pre;
+  text-shadow: -1px -1px 0 rgba(0,0,0,0.8), 1px -1px 0 rgba(0,0,0,0.8), -1px 1px 0 rgba(0,0,0,0.8), 1px 1px 0 rgba(0,0,0,0.8);
+}
+.text-cursor::after { content: '|'; animation: blink 0.8s step-end infinite; }
+.text-cursor.hidden { display: none; }
+@keyframes blink { 50% { opacity: 0; } }

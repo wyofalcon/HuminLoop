@@ -83,6 +83,13 @@ contextBridge.exposeInMainWorld('quickclip', {
   onColorChange: (cb) => ipcRenderer.on('set-color', (_, color) => cb(color)),
   onEnterRegionSelect: (cb) => ipcRenderer.on('enter-region-select', (_, screenshotDataUrl) => cb(screenshotDataUrl)),
   onDrawModeExited: (cb) => ipcRenderer.on('draw-mode-exited', () => cb()),
+  onTextModeToggle: (cb) => ipcRenderer.on('text-mode-toggle', (_, enabled) => cb(enabled)),
+  onTextModeExited: (cb) => ipcRenderer.on('text-mode-exited', () => cb()),
+
+  // Text mode (toolbar → overlay relay)
+  toggleTextMode: (enabled) => ipcRenderer.send('toggle-text-mode', enabled),
+  textModeChanged: (enabled) => ipcRenderer.send('text-mode-changed', enabled),
+  textModeExited: () => ipcRenderer.send('text-mode-exited'),
 
   // Events
   onClipsChanged: (cb) => ipcRenderer.on('clips-changed', () => cb()),

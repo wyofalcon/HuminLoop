@@ -1,5 +1,11 @@
 # Pre-Feature Audit Log
 
+## 2026-04-03 — Workflow Context Reader utility module
+
+- `main.js` and `api-server.js` both contain inline `.ai-workflow` path reads (duplicated pattern) — new module targets a different use case (arbitrary repoPath) so no refactor needed now, but future callers should use `workflow-context.js` instead of reimplementing
+- No existing `workflow-context.js` or equivalent utility found — new file is net-new, no dead code risk
+- Recommendation: over time, refactor Sciurus's own workflow reads in `main.js` and `api-server.js` to use a `hasWorkflow('.')` call from this module for consistency
+
 ## 2026-04-01 — Workflow toggle switches & clickable prompt cards
 
 - 3 unused preload methods found (getGeneralClips, getClipsForProject, saveCategories) — not blocking, unrelated to workflow

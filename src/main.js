@@ -486,7 +486,13 @@ async function rebuildTrayMenu() {
 }
 
 function createTray() {
-  const icon = nativeImage.createFromDataURL(FALLBACK_TRAY_ICON);
+  const iconPath = path.join(__dirname, '..', 'assets', 'icon.png');
+  let icon;
+  try {
+    icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+  } catch {
+    icon = nativeImage.createFromDataURL(FALLBACK_TRAY_ICON);
+  }
   tray = new Tray(icon);
   tray.setToolTip('Sciurus');
   rebuildTrayMenu();

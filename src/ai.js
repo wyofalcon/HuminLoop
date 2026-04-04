@@ -115,6 +115,18 @@ JSON schema:
   "url": "string — extracted URL if visible, otherwise empty string"
 }`;
 
+const LITE_PROMPT = `You are analyzing a screenshot with colored annotations from a developer.
+The annotations follow this color coding:
+- RED markings (circles, crosses, text): Remove, delete, or fix what is marked
+- GREEN markings (circles, highlights, text): Add or create something at this location
+- PINK/PURPLE markings (circles, highlights, text): Reference point — the user is identifying or pointing out this element for context. It may or may not need changes.
+
+PRIORITY: The developer's written note is the primary source of intent. If the note clarifies, overrides, or adds nuance to what the color annotations suggest, follow the note. Annotations are also expressions of intent and should be treated as instructions — but when the note and annotations conflict, the note wins.
+
+Use the project context and session information to generate a more specific and relevant prompt. Reference the current branch, recent work, and known issues where they relate to what the annotations and note describe.
+
+Generate a single, specific, actionable prompt that a coding AI could execute directly. Be concrete about what to change based on the annotations and note. Reference pink-marked elements as context when relevant. Output only the prompt text, no explanation or formatting.`;
+
 // State: which blocks are enabled (loaded from DB, defaults to all on)
 let enabledBlocks = null; // { category: true, project: true, ... }
 let customBlocks = []; // user-added custom instruction blocks
@@ -264,6 +276,39 @@ async function categorize(comment, categories, imageDataURL = null, projects = n
     return result;
   } catch (e) {
     console.error('[AI] Categorize error:', e.message);
+    return null;
+  }
+}
+
+async function generateLitePrompt(comment, imageDataURL, windowMeta = {}, project = {}, workflowContext = {}) {
+  if (!isEnabled()) return null;
+
+  const parts = [];
+  if (comment) parts.push(`Developer's note: ${comment}`);
+  if (windowMeta.windowTitle) parts.push(`Window: ${windowMeta.processName || 'unknown'} — ${windowMeta.windowTitle}`);
+  if (project.name) parts.push(`Project: ${project.name}`);
+  if (project.repo_path) parts.push(`Repository: ${project.repo_path}`);
+  if (project.description) parts.push(`Description: ${project.description}`);
+  if (workflowContext.session) parts.push(`\nCurrent development session context:\n${workflowContext.session}`);
+  if (workflowContext.audit) parts.push(`\nRecent code audit findings:\n${workflowContext.audit}`);
+
+  const userText = parts.join('\n');
+
+  const messageParts = [];
+  if (imageDataURL) {
+    const mimeMatch = imageDataURL.match(/^data:(image\/\w+);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+    const base64 = imageDataURL.replace(/^data:image\/\w+;base64,/, '');
+    messageParts.push({ inlineData: { mimeType, data: base64 } });
+  }
+  messageParts.push({ text: userText });
+
+  try {
+    const result = await callGemini(LITE_PROMPT, messageParts);
+    if (!result) return null;
+    return result.replace(/^["'`]+|["'`]+$/g, '').trim();
+  } catch (e) {
+    console.error('[Sciurus AI] Lite prompt generation failed:', e.message);
     return null;
   }
 }
@@ -454,6 +499,6 @@ async function summarizeNotes(notes) {
 }
 
 module.exports = {
-  init, isEnabled, categorize, search, summarizeNotes,
+  init, isEnabled, categorize, generateLitePrompt, search, summarizeNotes,
   getCategorizePrompt, getPromptBlocks, setPromptBlocks, resetPromptBlocks, estimateTokens,
 };

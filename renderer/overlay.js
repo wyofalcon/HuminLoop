@@ -49,6 +49,7 @@ drawCanvas.addEventListener('mousedown', (e) => {
     if (isTextMode) {
       cancelText();
       setTextMode(false);
+      window.quickclip.textModeChanged(false);
     } else {
       window.quickclip.exitDrawMode();
     }

@@ -189,12 +189,3 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowRight') navigate(1);
   else if (e.key === 'c' && (e.ctrlKey || e.metaKey)) copyPrompt();
 });
-
-// ── Helpers ──
-
-function esc(str) {
-  if (!str) return '';
-  const el = document.createElement('span');
-  el.textContent = str;
-  return el.innerHTML;
-}

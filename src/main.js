@@ -106,8 +106,8 @@ function sanitizeUpdates(updates) {
 }
 
 async function getAppMode() {
-  const settings = await db.getSettings();
-  return (settings && settings.app_mode) || 'full';
+  const mode = await db.getSettings('app_mode');
+  return mode || 'full';
 }
 
 // ── First-Run Detection ──
@@ -580,8 +580,7 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
 /** Run AI lite prompt generation in the background after a clip is saved in Lite mode. */
 async function autoCategorizeLite(clipId, comment, imageData, windowTitle, processName) {
   try {
-    const settings = await db.getSettings();
-    const projectId = settings.lite_active_project;
+    const projectId = await db.getSettings('lite_active_project');
     const project = projectId ? await db.getProject(projectId) : {};
     const session = project.repo_path ? workflowContext.readSessionContext(project.repo_path) : null;
     const audit = project.repo_path ? workflowContext.readAuditFindings(project.repo_path) : null;
@@ -609,9 +608,8 @@ ipcMain.handle('get-clips', () => db.getClips());
 ipcMain.handle('get-general-clips', () => db.getClips(null));
 ipcMain.handle('get-clips-for-project', (_, projectId) => db.getClips(projectId));
 ipcMain.handle('get-lite-clips', async () => {
-  const settings = await db.getSettings();
-  const projectId = settings.lite_active_project || undefined;
-  return db.getClips(projectId, 'lite');
+  const projectId = await db.getSettings('lite_active_project');
+  return db.getClips(projectId || undefined, 'lite');
 });
 
 ipcMain.handle('save-clip', async (_, clip) => {
@@ -628,9 +626,9 @@ ipcMain.handle('save-clip', async (_, clip) => {
   const mode = await getAppMode();
   if (mode === 'lite') {
     clip.source = 'lite';
-    const settings = await db.getSettings();
-    if (settings.lite_active_project && !clip.project_id) {
-      clip.project_id = settings.lite_active_project;
+    const liteProject = await db.getSettings('lite_active_project');
+    if (liteProject && !clip.project_id) {
+      clip.project_id = liteProject;
     }
   }
 

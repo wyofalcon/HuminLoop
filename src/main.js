@@ -549,8 +549,9 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
     if (result.summary) updates.aiSummary = result.summary;
     if (result.url) updates.url = result.url;
 
-    // AI-suggested project assignment (only if clip isn't already assigned)
-    if (result.project_id && (!clip || !clip.project_id)) {
+    // AI-suggested project assignment (only if clip isn't already assigned and not in lite mode)
+    const currentMode = await getAppMode();
+    if (result.project_id && (!clip || !clip.project_id) && currentMode !== 'lite') {
       // Verify the project actually exists
       const proj = await db.getProject(result.project_id);
       if (proj) {

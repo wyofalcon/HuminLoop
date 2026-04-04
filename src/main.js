@@ -424,7 +424,7 @@ ipcMain.handle('take-snippet', async () => {
   }
 });
 
-ipcMain.handle('snippet-captured', (_, dataUrl) => {
+ipcMain.handle('snippet-captured', async (_, dataUrl) => {
   // Notify toolbar that draw mode ended
   if (toolbarWindow && !toolbarWindow.isDestroyed()) {
     toolbarWindow.webContents.send('draw-mode-exited');

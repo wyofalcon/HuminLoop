@@ -36,7 +36,11 @@ async function loadProjects() {
   for (const p of projects) {
     const btn = document.createElement('button');
     btn.className = 'project-item';
-    btn.innerHTML = `<span class="project-dot" style="background:${esc(p.color)}"></span>${esc(p.name)}`;
+    const dot = document.createElement('span');
+    dot.className = 'project-dot';
+    dot.style.background = /^#[0-9a-fA-F]{3,8}$/.test(p.color) ? p.color : '#3b82f6';
+    btn.appendChild(dot);
+    btn.appendChild(document.createTextNode(p.name));
     btn.onclick = () => selectProject(p.id);
     list.appendChild(btn);
   }

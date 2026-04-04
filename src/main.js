@@ -51,7 +51,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ALLOWED_CLIP_FIELDS = [
   'category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment',
-  'window_title', 'process_name', 'completed_at', 'archived', 'summarize_count', 'source',
+  'window_title', 'process_name', 'completed_at', 'archived', 'summarize_count',
 ];
 
 // Tiny 32x32 fallback icon (transparent PNG) for the system tray
@@ -460,30 +460,29 @@ function startClipboardWatcher() {
 
 // ── System Tray ──
 
-function rebuildTrayMenu() {
+async function rebuildTrayMenu() {
   if (!tray) return;
-  getAppMode().then(mode => {
-    const modeLabel = mode === 'lite' ? 'Switch to Full Mode' : 'Switch to Lite Mode';
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Open Sciurus', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
-      { label: 'Quick Capture', click: async () => await createCaptureWindow(null) },
-      { label: 'Show Toolbar', click: () => createToolbarWindow() },
-      { type: 'separator' },
-      { label: modeLabel, click: async () => {
-        const current = await getAppMode();
-        const next = current === 'lite' ? 'full' : 'lite';
-        await db.saveSetting('app_mode', next);
-        if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
-        if (captureWindow && !captureWindow.isDestroyed()) { captureWindow.destroy(); captureWindow = null; }
-        await createMainWindow();
-        mainWindow.show();
-        rebuildTrayMenu();
-      }},
-      { label: 'Pause Watcher', type: 'checkbox', checked: false, click: (item) => { watcherPaused = item.checked; } },
-      { type: 'separator' },
-      { label: 'Quit', click: () => { isQuitting = true; app.quit(); } },
-    ]));
-  });
+  const mode = await getAppMode();
+  const modeLabel = mode === 'lite' ? 'Switch to Full Mode' : 'Switch to Lite Mode';
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open Sciurus', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+    { label: 'Quick Capture', click: async () => await createCaptureWindow(null) },
+    { label: 'Show Toolbar', click: () => createToolbarWindow() },
+    { type: 'separator' },
+    { label: modeLabel, click: async () => {
+      const current = await getAppMode();
+      const next = current === 'lite' ? 'full' : 'lite';
+      await db.saveSetting('app_mode', next);
+      if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
+      if (captureWindow && !captureWindow.isDestroyed()) { captureWindow.destroy(); captureWindow = null; }
+      await createMainWindow();
+      mainWindow.show();
+      rebuildTrayMenu();
+    }},
+    { label: 'Pause Watcher', type: 'checkbox', checked: false, click: (item) => { watcherPaused = item.checked; } },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { isQuitting = true; app.quit(); } },
+  ]));
 }
 
 function createTray() {
@@ -491,7 +490,7 @@ function createTray() {
   tray = new Tray(icon);
   tray.setToolTip('Sciurus');
   rebuildTrayMenu();
-  tray.on('click', () => { mainWindow.show(); mainWindow.focus(); });
+  tray.on('click', () => { if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); } });
 }
 
 // ── Migration from electron-store ──
@@ -609,7 +608,11 @@ async function autoCategorizeLite(clipId, comment, imageData, windowTitle, proce
 ipcMain.handle('get-clips', () => db.getClips());
 ipcMain.handle('get-general-clips', () => db.getClips(null));
 ipcMain.handle('get-clips-for-project', (_, projectId) => db.getClips(projectId));
-ipcMain.handle('get-lite-clips', () => db.getClips(undefined, 'lite'));
+ipcMain.handle('get-lite-clips', async () => {
+  const settings = await db.getSettings();
+  const projectId = settings.lite_active_project || undefined;
+  return db.getClips(projectId, 'lite');
+});
 
 ipcMain.handle('save-clip', async (_, clip) => {
   if (!clip || typeof clip.id !== 'string') return false;
@@ -651,8 +654,7 @@ ipcMain.handle('save-clip', async (_, clip) => {
   // AI categorization — runs if clip has content and AI is enabled.
   // Even if rules assigned a category/project, AI enriches with summary, tags, and fix prompts.
   if ((clip.comment || imageData) && ai.isEnabled()) {
-    const aiMode = await getAppMode();
-    if (aiMode === 'lite') {
+    if (mode === 'lite') {
       autoCategorizeLite(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
         .catch(e => console.error('[Sciurus] Lite prompt background error:', e.message));
     } else {

@@ -302,6 +302,19 @@ function renderSettingsSidebar(el) {
 }
 
 function renderHelpSidebar(el) {
+  if (isLiteMode) {
+    el.innerHTML = `
+      <div class="sec">Help</div>
+      <button class="sb-btn active" onclick="scrollHelpTo('getting-started')">Getting Started</button>
+      <button class="sb-btn" onclick="scrollHelpTo('annotations')">Annotation Colors</button>
+      <button class="sb-btn" onclick="scrollHelpTo('toolbar')">Toolbar</button>
+      <button class="sb-btn" onclick="scrollHelpTo('prompt')">AI Prompts</button>
+      <button class="sb-btn" onclick="scrollHelpTo('projects')">Projects</button>
+      <button class="sb-btn" onclick="scrollHelpTo('shortcuts')">Shortcuts</button>
+      <button class="sb-btn" onclick="scrollHelpTo('switching')">Switching Modes</button>
+    `;
+    return;
+  }
   el.innerHTML = `
     <div class="sec">Help</div>
     <button class="sb-btn active" onclick="scrollHelpTo('getting-started')">Getting Started</button>
@@ -323,6 +336,92 @@ function scrollHelpTo(id) {
 
 function renderHelpContent(el) {
   const ver = appVersion || { version: '?' };
+  if (isLiteMode) {
+    el.innerHTML = `
+      <div class="help-page">
+        <h2>Help — Sciurus! Lite Mode v${esc(ver.version)}</h2>
+
+        <div class="help-section" id="help-getting-started">
+          <h3>Getting Started</h3>
+          <p>Lite Mode is designed for fast iteration during active development. Annotate your screen, type a short note,
+          and get an AI-generated coding prompt you can paste directly into your AI coding tool.</p>
+          <div class="help-steps">
+            <div class="help-step"><span class="help-num">1</span>Select your active project in the sidebar</div>
+            <div class="help-step"><span class="help-num">2</span>Open the <strong>Toolbar</strong> from the tray menu</div>
+            <div class="help-step"><span class="help-num">3</span>Annotate your screen with colored markup</div>
+            <div class="help-step"><span class="help-num">4</span>Take a snippet or press <kbd>Ctrl+Shift+Q</kbd></div>
+            <div class="help-step"><span class="help-num">5</span>Add a note describing what needs to change</div>
+            <div class="help-step"><span class="help-num">6</span>Click <strong>Save &amp; Generate Prompt</strong></div>
+          </div>
+        </div>
+
+        <div class="help-section" id="help-annotations">
+          <h3>Annotation Colors</h3>
+          <p>Use the floating toolbar to draw on your screen before capturing. Each color has a meaning that the AI understands:</p>
+          <ul>
+            <li><strong style="color:#ff4444">Red</strong> — Remove, delete, or fix what is marked</li>
+            <li><strong style="color:#10b981">Green</strong> — Add or create something at this location</li>
+            <li><strong style="color:#ec4899">Pink</strong> — Reference point — identifies something for context (may or may not need changes)</li>
+          </ul>
+          <p>The <strong>T</strong> button on the toolbar lets you type text directly on screen in the active color.</p>
+          <p><strong>Priority:</strong> Your typed note is the primary source of intent. If the note conflicts with the annotations, AI follows the note.</p>
+        </div>
+
+        <div class="help-section" id="help-toolbar">
+          <h3>Toolbar</h3>
+          <p>The floating toolbar gives you quick access to annotation tools:</p>
+          <ul>
+            <li><strong>Color dots</strong> (red/green/pink) — Click to draw freehand in that color</li>
+            <li><strong>T button</strong> — Click to enter text mode, then click anywhere on screen to type</li>
+            <li><strong>Capture</strong> — Takes a region snippet of the annotated screen</li>
+            <li><strong>Right-click</strong> — Exits draw mode while on the overlay</li>
+          </ul>
+        </div>
+
+        <div class="help-section" id="help-prompt">
+          <h3>AI Prompt Generation</h3>
+          <p>After saving a capture, the AI generates a focused coding prompt based on:</p>
+          <ul>
+            <li>Your colored annotations (what to add, remove, or reference)</li>
+            <li>Your typed note (highest priority)</li>
+            <li>The active project's context (name, repo path, description)</li>
+            <li>Workflow session context (current branch, recent commits) — if the project has an <code>.ai-workflow/</code> directory</li>
+          </ul>
+          <p>The prompt appears in the clip card. Click <strong>Note</strong> or <strong>Prompt</strong> buttons to view them. Copy the prompt and paste it into your AI coding tool.</p>
+        </div>
+
+        <div class="help-section" id="help-projects">
+          <h3>Projects</h3>
+          <p>Lite Mode is project-focused — select one project at a time in the sidebar. All captures go to the active project.</p>
+          <ul>
+            <li><strong>Open in IDE</strong> — Mark a project as actively open in your IDE for visual tracking</li>
+            <li><strong>Show/hide completed</strong> — Toggle the checkbox to filter out completed notes</li>
+            <li><strong>Switch projects</strong> — Click a different project in the sidebar</li>
+          </ul>
+        </div>
+
+        <div class="help-section" id="help-shortcuts">
+          <h3>Keyboard Shortcuts</h3>
+          <table class="help-table">
+            <tr><td><kbd>Ctrl+Shift+Q</kbd></td><td>Quick capture (global — works from any app)</td></tr>
+            <tr><td><kbd>Enter</kbd></td><td>Save clip (in capture popup)</td></tr>
+            <tr><td><kbd>Escape</kbd></td><td>Close capture popup / Hide main window to tray</td></tr>
+            <tr><td><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd></td><td>Switch to red / green / pink (while in draw mode)</td></tr>
+            <tr><td><kbd>T</kbd></td><td>Toggle text mode (while in draw mode)</td></tr>
+            <tr><td><kbd>S</kbd></td><td>Take snippet (while in draw mode)</td></tr>
+            <tr><td><kbd>Right-click</kbd></td><td>Exit draw mode</td></tr>
+          </table>
+        </div>
+
+        <div class="help-section" id="help-switching">
+          <h3>Switching Modes</h3>
+          <p>Right-click the Sciurus tray icon and select <strong>Switch to Full Mode</strong> to access all features
+          (General Notes, Workflow tab, categories, window rules, and more).</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
   el.innerHTML = `
     <div class="help-page">
       <h2>Help — Sciurus! v${esc(ver.version)}</h2>

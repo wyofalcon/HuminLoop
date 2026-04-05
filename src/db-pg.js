@@ -83,6 +83,8 @@ async function runMigrations() {
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS summarize_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS source VARCHAR(10) NOT NULL DEFAULT 'full'`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_in_ide BOOLEAN NOT NULL DEFAULT FALSE`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }
@@ -160,6 +162,7 @@ const CLIPS_BASE_QUERY = `
          c.process_name AS "processName",
          c.deleted_at AS "deletedAt",
          c.summarize_count AS "summarizeCount",
+         c.source,
          COALESCE(
            json_agg(
              json_build_object('text', cc.text, 'ts', cc.ts)
@@ -178,20 +181,23 @@ const CLIPS_GROUP = `
   ORDER BY c.timestamp DESC
 `;
 
-async function getClips(projectId) {
-  let query, params;
-  if (projectId === undefined) {
-    // All clips (exclude deleted)
-    query = CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NULL ' + CLIPS_GROUP;
-    params = [];
-  } else if (projectId === null) {
-    // General notes (no project, exclude deleted)
-    query = CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL AND c.deleted_at IS NULL ' + CLIPS_GROUP;
-    params = [];
-  } else {
-    query = CLIPS_BASE_QUERY + ' WHERE c.project_id = $1 AND c.deleted_at IS NULL ' + CLIPS_GROUP;
-    params = [projectId];
+async function getClips(projectId, source) {
+  const conditions = ['c.deleted_at IS NULL'];
+  const params = [];
+
+  if (projectId === null) {
+    conditions.push('c.project_id IS NULL');
+  } else if (projectId !== undefined) {
+    params.push(projectId);
+    conditions.push(`c.project_id = $${params.length}`);
   }
+
+  if (source) {
+    params.push(source);
+    conditions.push(`c.source = $${params.length}`);
+  }
+
+  const query = CLIPS_BASE_QUERY + ' WHERE ' + conditions.join(' AND ') + CLIPS_GROUP;
   const { rows } = await pool.query(query, params);
   return rows;
 }
@@ -206,9 +212,11 @@ async function getClip(id) {
 
 async function saveClip(clip) {
   const categoryId = await getCategoryId(clip.category || 'Uncategorized');
+  const VALID_SOURCES = ['full', 'lite'];
+  const source = VALID_SOURCES.includes(clip.source) ? clip.source : 'full';
   await pool.query(
-    `INSERT INTO clips (id, image, comment, category_id, project_id, tags, ai_summary, url, status, timestamp, window_title, process_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    `INSERT INTO clips (id, image, comment, category_id, project_id, tags, ai_summary, url, status, timestamp, source, window_title, process_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [
       clip.id,
       clip.image || null,
@@ -220,6 +228,7 @@ async function saveClip(clip) {
       clip.url || null,
       clip.status || 'parked',
       clip.timestamp,
+      source,
       clip.window_title || null,
       clip.process_name || null,
     ]
@@ -398,6 +407,7 @@ async function updateProject(id, data) {
   if (data.description !== undefined) { fields.push(`description = $${idx++}`); params.push(data.description); }
   if (data.repo_path !== undefined) { fields.push(`repo_path = $${idx++}`); params.push(data.repo_path); }
   if (data.color !== undefined) { fields.push(`color = $${idx++}`); params.push(data.color); }
+  if (data.active_in_ide !== undefined) { fields.push(`active_in_ide = $${idx++}`); params.push(data.active_in_ide); }
 
   if (fields.length === 0) return null;
 

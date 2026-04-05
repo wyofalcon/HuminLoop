@@ -7,7 +7,7 @@ delete process.env.ELECTRON_RUN_AS_NODE;
 process.stdout?.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
 process.stderr?.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
 
-const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen, dialog, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const db = require('./db');
@@ -15,6 +15,7 @@ const ai = require('./ai');
 const rules = require('./rules');
 const { getActiveWindow } = require('./window-info');
 const images = require('./images');
+const workflowContext = require('./workflow-context');
 
 // ── .env loader (manual — dotenv v17 changed its API) ──
 
@@ -63,6 +64,9 @@ let tray = null;
 let mainWindow = null;
 let captureWindow = null;
 let setupWindow = null;
+let toolbarWindow = null;
+let overlayWindow = null;
+let preOverlayWindowMeta = null; // Window metadata captured before overlay opens
 let clipboardWatcher = null;
 let lastClipHash = null;
 let watcherPaused = false;
@@ -101,6 +105,11 @@ function sanitizeUpdates(updates) {
   return clean;
 }
 
+async function getAppMode() {
+  const mode = await db.getSettings('app_mode');
+  return mode || 'full';
+}
+
 // ── First-Run Detection ──
 
 function isFirstRun() {
@@ -133,9 +142,12 @@ function createSetupWindow() {
   setupWindow.on('closed', () => { setupWindow = null; });
 }
 
-function createMainWindow() {
+async function createMainWindow() {
+  const mode = await getAppMode();
+  const htmlFile = 'index.html';  // Both modes use same renderer; lite mode hides tabs via JS
+  const windowSize = mode === 'lite' ? { width: 450, height: 600 } : { width: 1100, height: 750 };
   mainWindow = new BrowserWindow({
-    width: 1100, height: 750, show: false,
+    width: windowSize.width, height: windowSize.height, show: false,
     title: 'Sciurus',
     backgroundColor: '#13131f',
     webPreferences: {
@@ -144,7 +156,7 @@ function createMainWindow() {
       nodeIntegration: false,
     },
   });
-  mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  mainWindow.loadFile(path.join(__dirname, '..', 'renderer', htmlFile));
   if (process.env.SCIURUS_DEV === '1') mainWindow.webContents.openDevTools();
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
@@ -154,7 +166,7 @@ function createMainWindow() {
   });
 }
 
-function createCaptureWindow(imageDataURL, windowMeta = null) {
+async function createCaptureWindow(imageDataURL, windowMeta = null) {
   if (captureWindow && !captureWindow.isDestroyed()) {
     captureWindow.show();
     captureWindow.focus();
@@ -162,10 +174,13 @@ function createCaptureWindow(imageDataURL, windowMeta = null) {
     captureWindow.webContents.send('new-screenshot', imageDataURL, windowMeta);
     return;
   }
+  const mode = await getAppMode();
+  const htmlFile = mode === 'lite' ? 'lite-capture.html' : 'capture.html';
+  const captureSize = mode === 'lite' ? { width: 340, height: 420 } : { width: 460, height: 580 };
   const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
   captureWindow = new BrowserWindow({
-    width: 460, height: 580,
-    x: screenW - 480, y: 20,
+    width: captureSize.width, height: captureSize.height,
+    x: screenW - (captureSize.width + 20), y: 20,
     frame: false, alwaysOnTop: true,
     resizable: true, skipTaskbar: true,
     backgroundColor: '#1e1e2e',
@@ -175,7 +190,7 @@ function createCaptureWindow(imageDataURL, windowMeta = null) {
       nodeIntegration: false,
     },
   });
-  captureWindow.loadFile(path.join(__dirname, '..', 'renderer', 'capture.html'));
+  captureWindow.loadFile(path.join(__dirname, '..', 'renderer', htmlFile));
   captureWindow.once('ready-to-show', () => {
     captureWindow.show();
     captureWindow.focus();
@@ -185,11 +200,249 @@ function createCaptureWindow(imageDataURL, windowMeta = null) {
   captureWindow.on('closed', () => { captureWindow = null; });
 }
 
+// ── Annotation Toolbar ──
+
+async function createToolbarWindow() {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.show();
+    toolbarWindow.focus();
+    return;
+  }
+  const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
+  const tbWidth = 450;
+  const tbHeight = 44;
+  // Default position: top-center of screen
+  let x = Math.round((screenW - tbWidth) / 2);
+  let y = 10;
+  // Restore saved position if available
+  try {
+    const savedPos = await db.getSettings('toolbar_position');
+    if (savedPos && typeof savedPos.x === 'number' && typeof savedPos.y === 'number') {
+      x = savedPos.x;
+      y = savedPos.y;
+    }
+  } catch {}
+  toolbarWindow = new BrowserWindow({
+    width: tbWidth, height: tbHeight,
+    x, y,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  toolbarWindow.loadFile(path.join(__dirname, '..', 'renderer', 'toolbar.html'));
+  toolbarWindow.setAlwaysOnTop(true, 'floating');
+
+  // Save position when toolbar is moved
+  toolbarWindow.on('moved', () => {
+    if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+      const [px, py] = toolbarWindow.getPosition();
+      db.saveSetting('toolbar_position', { x: px, y: py }).catch(() => {});
+    }
+  });
+
+  toolbarWindow.on('closed', () => { toolbarWindow = null; });
+}
+
+ipcMain.on('show-main', () => {
+  if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
+});
+
+ipcMain.on('minimize-toolbar', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.setSize(40, 40);
+    toolbarWindow.setResizable(false);
+  }
+});
+
+ipcMain.on('restore-toolbar', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.setSize(450, 44);
+    toolbarWindow.setResizable(false);
+  }
+});
+
+ipcMain.on('close-toolbar', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.hide();
+  }
+});
+
+ipcMain.handle('get-toolbar-project', async () => {
+  // Read the project name from package.json in the working directory
+  // (the project the workflow is attached to)
+  const pkgPath = path.join(__dirname, '..', 'package.json');
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return pkg.productName || pkg.name || null;
+  } catch {
+    return null;
+  }
+});
+
+// ── Draw Overlay ──
+
+function createOverlayWindow() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.focus();
+    return;
+  }
+  const display = screen.getPrimaryDisplay();
+  overlayWindow = new BrowserWindow({
+    x: display.bounds.x,
+    y: display.bounds.y,
+    width: display.bounds.width,
+    height: display.bounds.height,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    fullscreenable: true,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  overlayWindow.loadFile(path.join(__dirname, '..', 'renderer', 'overlay.html'));
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  overlayWindow.setFullScreen(true);
+  // Prevent the overlay from being ignored by the WM
+  overlayWindow.setIgnoreMouseEvents(false);
+
+  overlayWindow.on('closed', () => {
+    overlayWindow = null;
+    if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+      toolbarWindow.webContents.send('draw-mode-exited');
+    }
+  });
+}
+
+function destroyOverlayWindow() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.removeAllListeners('closed');
+    overlayWindow.destroy();
+    overlayWindow = null;
+  }
+}
+
+ipcMain.handle('enter-draw-mode', (_, color) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    // Overlay already open — just switch color
+    overlayWindow.webContents.send('set-color', color);
+    return;
+  }
+  // Capture window metadata BEFORE overlay covers the screen
+  preOverlayWindowMeta = getActiveWindow();
+  createOverlayWindow();
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.once('did-finish-load', () => {
+      overlayWindow.webContents.send('set-color', color);
+    });
+  }
+});
+
+ipcMain.handle('exit-draw-mode', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.webContents.send('draw-mode-exited');
+  }
+  destroyOverlayWindow();
+  preOverlayWindowMeta = null;
+});
+
+// ── Text Mode IPC Relay ──
+
+ipcMain.on('toggle-text-mode', (_, enabled) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('text-mode-toggle', enabled);
+  }
+});
+
+ipcMain.on('text-mode-changed', (_, enabled) => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    if (!enabled) toolbarWindow.webContents.send('text-mode-exited');
+  }
+});
+
+ipcMain.on('text-mode-exited', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.webContents.send('text-mode-exited');
+  }
+});
+
+ipcMain.handle('take-snippet', async () => {
+  // Capture window metadata before anything else
+  if (!preOverlayWindowMeta) {
+    preOverlayWindowMeta = getActiveWindow();
+  }
+
+  // Hide overlay if it exists (so it's not in the screenshot)
+  const hadOverlay = overlayWindow && !overlayWindow.isDestroyed();
+  if (hadOverlay) {
+    overlayWindow.hide();
+  }
+
+  // Small delay to let windows hide
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: screen.getPrimaryDisplay().size,
+  });
+
+  if (sources.length === 0) {
+    if (hadOverlay && overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.show();
+      overlayWindow.setFullScreen(true);
+    }
+    return;
+  }
+  const screenshot = sources[0].thumbnail.toDataURL();
+
+  if (hadOverlay && overlayWindow && !overlayWindow.isDestroyed()) {
+    // Existing overlay — switch to region select with annotations preserved
+    overlayWindow.show();
+    overlayWindow.setFullScreen(true);
+    overlayWindow.webContents.send('enter-region-select', screenshot);
+  } else {
+    // No overlay — create one and go straight to region select
+    createOverlayWindow();
+    overlayWindow.webContents.once('did-finish-load', () => {
+      overlayWindow.webContents.send('enter-region-select', screenshot);
+    });
+  }
+});
+
+ipcMain.handle('snippet-captured', async (_, dataUrl) => {
+  // Notify toolbar that draw mode ended
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.webContents.send('draw-mode-exited');
+  }
+  // Destroy the overlay
+  destroyOverlayWindow();
+
+  // Send the snippet to the capture popup (same flow as clipboard watcher)
+  const meta = preOverlayWindowMeta || { title: 'Screen Capture', processName: 'Sciurus Toolbar' };
+  preOverlayWindowMeta = null;
+  await createCaptureWindow(dataUrl, meta);
+});
+
 // ── Clipboard Watcher ──
 
 function startClipboardWatcher() {
   lastClipHash = getClipboardImageHash();
-  clipboardWatcher = setInterval(() => {
+  clipboardWatcher = setInterval(async () => {
     if (watcherPaused) return;
     const hash = getClipboardImageHash();
     if (hash && hash !== lastClipHash) {
@@ -199,7 +452,7 @@ function startClipboardWatcher() {
         // Capture active window metadata BEFORE opening popup
         const windowMeta = getActiveWindow();
         console.log(`[Sciurus] Window context: ${windowMeta.processName} — ${windowMeta.title}`);
-        createCaptureWindow(url, windowMeta);
+        await createCaptureWindow(url, windowMeta);
       }
     }
   }, CLIPBOARD_POLL_MS);
@@ -207,21 +460,43 @@ function startClipboardWatcher() {
 
 // ── System Tray ──
 
-function createTray() {
-  const icon = nativeImage.createFromDataURL(FALLBACK_TRAY_ICON);
-  tray = new Tray(icon);
-  tray.setToolTip('Sciurus');
+async function rebuildTrayMenu() {
+  if (!tray) return;
+  const mode = await getAppMode();
+  const modeLabel = mode === 'lite' ? 'Switch to Full Mode' : 'Switch to Lite Mode';
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Sciurus', click: () => { mainWindow.show(); mainWindow.focus(); } },
-    { label: 'Quick Capture', click: () => createCaptureWindow(null) },
+    { label: 'Open Sciurus', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+    { label: 'Quick Capture', click: async () => await createCaptureWindow(null) },
+    { label: 'Show Toolbar', click: () => createToolbarWindow() },
     { type: 'separator' },
-    { label: 'Pause Watcher', type: 'checkbox', checked: false, click: (item) => {
-      watcherPaused = item.checked;
+    { label: modeLabel, click: async () => {
+      const current = await getAppMode();
+      const next = current === 'lite' ? 'full' : 'lite';
+      await db.saveSetting('app_mode', next);
+      if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
+      if (captureWindow && !captureWindow.isDestroyed()) { captureWindow.destroy(); captureWindow = null; }
+      await createMainWindow();
+      mainWindow.show();
+      rebuildTrayMenu();
     }},
+    { label: 'Pause Watcher', type: 'checkbox', checked: false, click: (item) => { watcherPaused = item.checked; } },
     { type: 'separator' },
     { label: 'Quit', click: () => { isQuitting = true; app.quit(); } },
   ]));
-  tray.on('click', () => { mainWindow.show(); mainWindow.focus(); });
+}
+
+function createTray() {
+  const iconPath = path.join(__dirname, '..', 'assets', 'icon.png');
+  let icon;
+  try {
+    icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+  } catch {
+    icon = nativeImage.createFromDataURL(FALLBACK_TRAY_ICON);
+  }
+  tray = new Tray(icon);
+  tray.setToolTip('Sciurus');
+  rebuildTrayMenu();
+  tray.on('click', () => { if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); } });
 }
 
 // ── Migration from electron-store ──
@@ -280,8 +555,9 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
     if (result.summary) updates.aiSummary = result.summary;
     if (result.url) updates.url = result.url;
 
-    // AI-suggested project assignment (only if clip isn't already assigned)
-    if (result.project_id && (!clip || !clip.project_id)) {
+    // AI-suggested project assignment (only if clip isn't already assigned and not in lite mode)
+    const currentMode = await getAppMode();
+    if (result.project_id && (!clip || !clip.project_id) && currentMode !== 'lite') {
       // Verify the project actually exists
       const proj = await db.getProject(result.project_id);
       if (proj) {
@@ -308,11 +584,40 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
   }
 }
 
+/** Run AI lite prompt generation in the background after a clip is saved in Lite mode. */
+async function autoCategorizeLite(clipId, comment, imageData, windowTitle, processName) {
+  try {
+    const projectId = await db.getSettings('lite_active_project');
+    const project = projectId ? await db.getProject(projectId) : {};
+    const session = project.repo_path ? workflowContext.readSessionContext(project.repo_path) : null;
+    const audit = project.repo_path ? workflowContext.readAuditFindings(project.repo_path) : null;
+    const compressedImage = imageData ? images.compressForAI(imageData) : null;
+    const prompt = await ai.generateLitePrompt(
+      comment, compressedImage,
+      { windowTitle, processName },
+      { name: project.name, description: project.description, repo_path: project.repo_path },
+      { session, audit }
+    );
+    if (prompt) {
+      await db.updateClip(clipId, { aiFixPrompt: prompt });
+      notifyMainWindow('clips-changed');
+      console.log(`[Sciurus] Lite prompt generated for clip ${clipId}`);
+      addAuditEntry('ai', `Lite prompt generated for clip ${clipId}`);
+    }
+  } catch (e) {
+    console.error('[Sciurus] Lite prompt generation failed:', e.message);
+  }
+}
+
 // ── IPC Handlers: Clips ──
 
 ipcMain.handle('get-clips', () => db.getClips());
 ipcMain.handle('get-general-clips', () => db.getClips(null));
 ipcMain.handle('get-clips-for-project', (_, projectId) => db.getClips(projectId));
+ipcMain.handle('get-lite-clips', async () => {
+  const projectId = await db.getSettings('lite_active_project');
+  return db.getClips(projectId || undefined, 'lite');
+});
 
 ipcMain.handle('save-clip', async (_, clip) => {
   if (!clip || typeof clip.id !== 'string') return false;
@@ -322,6 +627,16 @@ ipcMain.handle('save-clip', async (_, clip) => {
   if (imageData) {
     images.saveImage(clip.id, imageData);
     clip.image = '__on_disk__';
+  }
+
+  // Lite mode: inject source and active project
+  const mode = await getAppMode();
+  if (mode === 'lite') {
+    clip.source = 'lite';
+    const liteProject = await db.getSettings('lite_active_project');
+    if (liteProject && !clip.project_id) {
+      clip.project_id = liteProject;
+    }
   }
 
   // Rule-based categorization (before saving — so the clip gets correct initial values)
@@ -345,8 +660,14 @@ ipcMain.handle('save-clip', async (_, clip) => {
   // Even if rules assigned a category/project, AI enriches with summary, tags, and fix prompts.
   if ((clip.comment || imageData) && ai.isEnabled()) {
     console.log(`[Sciurus] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
+    // Always run standard categorization (summary, tags, category)
     autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
       .catch(e => console.error('[Sciurus] Auto-categorize background error:', e.message));
+    // In lite mode, also generate the focused fix prompt
+    if (mode === 'lite') {
+      autoCategorizeLite(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
+        .catch(e => console.error('[Sciurus] Lite prompt background error:', e.message));
+    }
   } else if (!ai.isEnabled()) {
     console.log('[Sciurus] AI disabled — skipping categorization');
   }
@@ -356,6 +677,16 @@ ipcMain.handle('save-clip', async (_, clip) => {
 // Load image on demand from disk
 ipcMain.handle('get-clip-image', (_, clipId) => {
   return images.loadImage(clipId);
+});
+
+// Copy a clip's image to the system clipboard
+ipcMain.handle('copy-image-to-clipboard', (_, clipId) => {
+  const dataUrl = images.loadImage(clipId);
+  if (!dataUrl) return false;
+  const img = nativeImage.createFromDataURL(dataUrl);
+  if (img.isEmpty()) return false;
+  clipboard.writeImage(img);
+  return true;
 });
 
 ipcMain.handle('update-clip', async (_, id, updates) => {
@@ -644,6 +975,92 @@ ipcMain.handle('retrigger-ai', async (_, clipId) => {
   return true;
 });
 
+// ── IPC Handlers: App Mode ──
+
+ipcMain.handle('get-app-mode', async () => await getAppMode());
+
+ipcMain.handle('toggle-app-mode', async () => {
+  const current = await getAppMode();
+  const next = current === 'lite' ? 'full' : 'lite';
+  await db.saveSetting('app_mode', next);
+  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
+  if (captureWindow && !captureWindow.isDestroyed()) { captureWindow.destroy(); captureWindow = null; }
+  await createMainWindow();
+  mainWindow.show();
+  rebuildTrayMenu();
+  return next;
+});
+
+ipcMain.handle('set-lite-active-project', async (_, projectId) => {
+  await db.saveSetting('lite_active_project', projectId);
+  return true;
+});
+
+ipcMain.handle('toggle-project-ide', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project) return null;
+  const newVal = !project.active_in_ide;
+  await db.updateProject(projectId, { active_in_ide: newVal });
+  notifyMainWindow('projects-changed');
+  return newVal;
+});
+
+// ── IPC Handlers: Workflow ──
+
+ipcMain.handle('get-workflow-status', async () => {
+  const workflowDir = path.join(__dirname, '..', '.ai-workflow');
+  const contextDir = path.join(workflowDir, 'context');
+  const read = (f) => { try { return fs.readFileSync(path.join(contextDir, f), 'utf8').trim(); } catch { return null; } };
+  return {
+    relayMode: read('RELAY_MODE') || 'review',
+    auditMode: read('AUDIT_WATCH_MODE') || 'off',
+    session: read('SESSION.md'),
+    hasWorkflow: fs.existsSync(workflowDir),
+  };
+});
+
+ipcMain.handle('toggle-relay-mode', async () => {
+  const contextDir = path.join(__dirname, '..', '.ai-workflow', 'context');
+  const file = path.join(contextDir, 'RELAY_MODE');
+  let current = 'review';
+  try { current = fs.readFileSync(file, 'utf8').trim(); } catch {}
+  const next = current === 'auto' ? 'review' : 'auto';
+  fs.writeFileSync(file, next, 'utf8');
+  return next;
+});
+
+ipcMain.handle('toggle-audit-watch', async () => {
+  const contextDir = path.join(__dirname, '..', '.ai-workflow', 'context');
+  const file = path.join(contextDir, 'AUDIT_WATCH_MODE');
+  let current = 'off';
+  try { current = fs.readFileSync(file, 'utf8').trim(); } catch {}
+  const next = current === 'on' ? 'off' : 'on';
+  fs.writeFileSync(file, next, 'utf8');
+  return next;
+});
+
+ipcMain.handle('get-workflow-changelog', async () => {
+  const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'CHANGELOG.md');
+  try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+});
+
+ipcMain.handle('get-workflow-prompts', async () => {
+  const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  try {
+    const raw = fs.readFileSync(p, 'utf8').trim();
+    if (!raw) return [];
+    return raw.split('\n').map((line) => {
+      const parts = line.split('|');
+      return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3], type: parts[4] || 'CRAFTED', parentId: parts[5] || null };
+    }).reverse();
+  } catch { return []; }
+});
+
+ipcMain.handle('get-workflow-audits', async () => {
+  const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'AUDIT_LOG.md');
+  try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+});
+
 // ── IPC Handlers: Window Controls ──
 
 ipcMain.on('close-capture', () => {
@@ -654,8 +1071,8 @@ ipcMain.on('hide-main', () => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
 });
 
-ipcMain.on('open-capture', () => {
-  createCaptureWindow(getClipboardImageURL());
+ipcMain.on('open-capture', async () => {
+  await createCaptureWindow(getClipboardImageURL());
 });
 
 // ── IPC Handlers: Setup Wizard ──
@@ -818,7 +1235,7 @@ async function launchMainApp() {
   // One-time migration from electron-store
   await migrateIfNeeded();
 
-  if (!mainWindow) createMainWindow();
+  if (!mainWindow) await createMainWindow();
   createTray();
 
   // Show the main window
@@ -826,6 +1243,7 @@ async function launchMainApp() {
   mainWindow.focus();
 
   startClipboardWatcher();
+  createToolbarWindow();
   ai.init();
 
   // Load saved prompt block config from DB
@@ -854,9 +1272,9 @@ async function launchMainApp() {
   );
 
   const hotkey = process.env.HOTKEY_COMBO || 'CommandOrControl+Shift+Q';
-  globalShortcut.register(hotkey, () => {
+  globalShortcut.register(hotkey, async () => {
     const windowMeta = getActiveWindow();
-    createCaptureWindow(getClipboardImageURL(), windowMeta);
+    await createCaptureWindow(getClipboardImageURL(), windowMeta);
   });
 }
 
@@ -885,5 +1303,7 @@ app.on('window-all-closed', (e) => e.preventDefault());
 app.on('will-quit', async () => {
   globalShortcut.unregisterAll();
   if (clipboardWatcher) clearInterval(clipboardWatcher);
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) toolbarWindow.destroy();
+  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
   await db.close();
 });

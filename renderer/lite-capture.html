@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+  <link rel="stylesheet" href="lite-capture.css">
+</head>
+<body>
+  <div class="capture-window">
+    <div class="header">
+      <span class="title">Quick Capture</span>
+      <button class="close-btn" onclick="window.quickclip.closeCapture()">&times;</button>
+    </div>
+
+    <div class="image-wrap">
+      <div id="placeholder" class="placeholder">No screenshot</div>
+      <img id="ssImg" class="screenshot" style="display:none;">
+    </div>
+
+    <div class="note-wrap">
+      <textarea id="noteInput" class="note-input" placeholder="What needs to change?" rows="3"></textarea>
+    </div>
+
+    <button id="saveBtn" class="save-btn" disabled onclick="save()">Save &amp; Generate Prompt</button>
+  </div>
+
+  <script src="lite-capture.js"></script>
+</body>
+</html>

@@ -4,9 +4,18 @@ token.json
 node_modules/
 dist/
 dist2/
+.superpowers/
 out/
 Notes/
 *.pyc
 __pycache__/
 screenshots/
 .claude/
+
+# Workflow runtime state (instructions and scripts are tracked)
+.ai-workflow/context/PROMPT_TRACKER.log
+.ai-workflow/context/.prompt-counter
+.ai-workflow/context/builder-output.log
+.ai-workflow/context/.dashboard.pid
+.ai-workflow/context/.audit-last-*
+.ai-workflow/context/WORKFLOW_CHANGE_PENDING

@@ -70,6 +70,14 @@ body {
 
 .header h1 { font-size: 18px; font-weight: 700; white-space: nowrap; }
 
+.lite-mode-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #4fc3f7;
+  margin-left: 12px;
+  letter-spacing: 0.5px;
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -460,7 +468,24 @@ body {
   margin-right: 0;
 }
 
+.img-wrap {
+  position: relative; float: left; margin-right: 14px; margin-bottom: 8px;
+}
+.img-wrap img { float: none; margin-right: 0; margin-bottom: 0; }
+.img-wrap:has(.expanded) { float: none; margin-right: 0; width: 100%; }
+.img-wrap img.expanded { width: 100%; }
+.img-copy-btn {
+  position: absolute; top: 4px; right: 4px;
+  background: rgba(0,0,0,.55); border: none; border-radius: 4px;
+  color: #fff; font-size: 14px; padding: 2px 5px; cursor: pointer;
+  opacity: 0; transition: opacity .15s;
+}
+.img-wrap:hover .img-copy-btn { opacity: .8; }
+.img-copy-btn:hover { opacity: 1 !important; background: rgba(0,0,0,.75); }
+.img-copy-flash { opacity: 1 !important; background: #34d399 !important; color: #fff; }
+
 .comment { font-size: 14px; color: var(--text-primary); margin-bottom: 6px; line-height: 1.6; }
+.clip-clearfix { clear: both; }
 
 /* Inline copy-to-clipboard */
 .copyable { position: relative; cursor: pointer; transition: background 0.15s; }
@@ -779,6 +804,54 @@ body {
 
 .project-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
 .project-repo { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; font-family: monospace; }
+
+.completed-toggle {
+  margin: 8px 0;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.toggle-label input[type="checkbox"] {
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
+.toggle-label:hover span {
+  color: var(--text-primary);
+}
+
+.ide-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  color: #22c55e;
+  background: #22c55e1a;
+  border: 1px solid #22c55e44;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-left: 8px;
+  vertical-align: middle;
+  letter-spacing: 0.5px;
+}
+
+.ide-dot {
+  font-size: 8px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.sb-btn-action.ide-active {
+  color: #22c55e;
+  border-color: #22c55e66;
+  background: #22c55e11;
+}
 
 /* ── Project Dialog ── */
 
@@ -1160,6 +1233,133 @@ kbd {
   color: var(--text-primary);
 }
 .help-table td:first-child { width: 160px; }
+
+/* ── Workflow Tab ── */
+
+.wf-back-bar { display: flex; justify-content: flex-end; padding: 12px 16px 0; }
+.wf-back-btn {
+  background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+  padding: 5px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; transition: all .15s;
+}
+.wf-back-btn:hover { color: var(--text-primary); border-color: var(--accent); background: rgba(99,102,241,.08); }
+
+.wf-empty { padding: 40px 20px; text-align: center; color: var(--text-dim); }
+.wf-empty h2 { color: var(--text-primary); margin-bottom: 8px; font-size: 18px; }
+.wf-empty p { font-size: 13px; }
+.wf-empty code { background: var(--bg-card); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
+.wf-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+.wf-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 16px;
+}
+.wf-card-toggle, .wf-card-click { cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.wf-card-toggle:hover, .wf-card-click:hover { border-color: var(--accent-blue); background: var(--bg-hover); }
+.wf-card-click.wf-card-active { border-color: var(--accent-blue); }
+.wf-card-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.wf-card-value { font-size: 14px; color: var(--text-primary); display: flex; align-items: center; gap: 10px; }
+.wf-card-num { font-size: 28px; font-weight: 700; font-family: monospace; }
+.wf-card-hint { font-size: 11px; color: var(--text-dim); margin-top: 8px; }
+.wf-toggle-label { font-size: 13px; font-weight: 600; text-transform: uppercase; }
+
+/* Toggle switch */
+.wf-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+.wf-switch input { opacity: 0; width: 0; height: 0; }
+.wf-slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: #555; border-radius: 20px; transition: background 0.2s;
+}
+.wf-slider::before {
+  content: ''; position: absolute; height: 14px; width: 14px;
+  left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: transform 0.2s;
+}
+.wf-switch input:checked + .wf-slider { background: #34d399; }
+.wf-switch input:checked + .wf-slider::before { transform: translateX(16px); }
+
+.wf-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.wf-badge-green { background: #10b98120; color: #34d399; }
+.wf-badge-yellow { background: #f59e0b20; color: #fbbf24; }
+.wf-badge-red { background: #ef444420; color: #f87171; }
+.wf-badge-dim { background: var(--bg-card); color: var(--text-dim); }
+
+.wf-section { padding: 0 16px 16px; }
+.wf-section h3 { font-size: 14px; color: var(--text-primary); margin-bottom: 10px; }
+
+.wf-roles-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.wf-roles-table th { text-align: left; padding: 6px 10px; color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid var(--border-light); }
+.wf-roles-table td { padding: 8px 10px; color: var(--text-primary); border-bottom: 1px solid var(--border-light); }
+.wf-roles-table tr:hover td { background: var(--bg-hover); }
+
+.wf-prompt-filter-bar { display: flex; gap: 6px; padding: 12px 16px 0; }
+.wf-filter-btn {
+  background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 4px;
+  padding: 4px 12px; font-size: 12px; color: var(--text-dim); cursor: pointer; transition: all 0.15s;
+}
+.wf-filter-btn:hover { border-color: var(--accent-blue); color: var(--text-primary); }
+.wf-filter-btn.active { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
+.wf-prompt-list { padding: 12px 16px; }
+.wf-prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 13px;
+}
+.wf-prompt-row:hover { background: var(--bg-hover); }
+.wf-prompt-id { font-family: monospace; font-size: 12px; color: var(--accent-blue); min-width: 160px; }
+.wf-prompt-desc { flex: 1; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-prompt-time { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+
+.wf-markdown {
+  padding: 16px;
+}
+.wf-markdown pre {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+/* ── Workflow Audit Log ── */
+.wf-audit-list { padding: 12px 16px; }
+.wf-audit-entry { border: 1px solid var(--border-light); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.wf-audit-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; cursor: pointer; background: var(--bg-card); transition: background 0.15s;
+}
+.wf-audit-header:hover { background: var(--bg-hover); }
+.wf-audit-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.wf-audit-arrow { font-size: 10px; color: var(--text-dim); transition: transform 0.15s; }
+.wf-audit-body {
+  padding: 12px 14px; border-top: 1px solid var(--border-light); background: var(--bg-main);
+}
+.wf-audit-body.collapsed { display: none; }
+.wf-audit-body pre {
+  font-size: 12px; line-height: 1.5; color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-word; margin: 0;
+}
 
 /* ── Project Summary Panel ── */
 

@@ -3,6 +3,7 @@
 // ── State ──
 
 let activeTab = 'general';
+let isLiteMode = false;
 let clips = [];
 let categories = [];
 let projects = [];
@@ -23,6 +24,14 @@ let collapsedGroups = new Set();
 
 // Projects tab state
 let selectedProjectId = null;
+let hideCompleted = false;
+
+// Workflow tab state
+let workflowStatus = null;
+let workflowChangelog = null;
+let workflowPrompts = [];
+let workflowAudits = null;
+let workflowSection = 'status';
 
 // ── Init ──
 
@@ -30,9 +39,39 @@ let selectedProjectId = null;
   const hasKey = await window.quickclip.hasApiKey();
   if (!hasKey) document.getElementById('noKeyBanner').style.display = 'block';
   appVersion = await window.quickclip.getAppVersion();
+
+  // Check if we're in lite mode
+  const mode = await window.quickclip.getAppMode();
+  if (mode === 'lite') {
+    isLiteMode = true;
+    applyLiteMode();
+  }
+
   await loadData();
   renderAll();
 })();
+
+function applyLiteMode() {
+  // Hide General Notes and Workflow tabs
+  document.querySelectorAll('.tab').forEach((btn) => {
+    if (btn.dataset.tab === 'general' || btn.dataset.tab === 'workflow') {
+      btn.style.display = 'none';
+    }
+  });
+  // Add "Lite Mode" label to header
+  const h1 = document.querySelector('.header h1');
+  if (h1) {
+    const label = document.createElement('span');
+    label.className = 'lite-mode-label';
+    label.textContent = 'Lite Mode';
+    h1.parentNode.insertBefore(label, h1.nextSibling);
+  }
+  // Force Projects tab active
+  activeTab = 'projects';
+  document.querySelectorAll('.tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === 'projects');
+  });
+}
 
 async function loadData() {
   [clips, categories, projects, settings] = await Promise.all([
@@ -41,6 +80,16 @@ async function loadData() {
     window.quickclip.getProjects(),
     window.quickclip.getSettings(),
   ]);
+  // In lite mode, auto-select the active project (or first project if none set)
+  if (isLiteMode && selectedProjectId === null) {
+    const liteProject = settings.lite_active_project;
+    if (liteProject) {
+      selectedProjectId = liteProject;
+    } else if (projects.length > 0) {
+      selectedProjectId = projects[0].id;
+      window.quickclip.setLiteActiveProject(projects[0].id);
+    }
+  }
 }
 
 // Escape hides the main window to tray
@@ -83,6 +132,8 @@ function escAttr(s) {
 // ── Tab Switching ──
 
 function switchTab(tab) {
+  // In lite mode, only allow projects, settings, and help tabs
+  if (isLiteMode && (tab === 'general' || tab === 'workflow')) return;
   activeTab = tab;
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
@@ -141,6 +192,9 @@ function updateStatusBar() {
     sub.textContent = `${trashClips.length} trashed note${trashClips.length !== 1 ? 's' : ''}`;
   } else if (activeTab === 'help') {
     sub.textContent = 'Help — how to use Sciurus';
+  } else if (activeTab === 'workflow') {
+    const mode = workflowStatus?.relayMode || '?';
+    sub.textContent = `AI Dev Workflow · relay: ${mode}`;
   } else {
     sub.textContent = 'App settings';
   }
@@ -156,6 +210,7 @@ function renderSidebar() {
   else if (activeTab === 'projects') renderProjectsSidebar(el);
   else if (activeTab === 'settings') renderSettingsSidebar(el);
   else if (activeTab === 'help') renderHelpSidebar(el);
+  else if (activeTab === 'workflow') renderWorkflowSidebar(el);
 }
 
 function renderGeneralSidebar(el) {
@@ -214,13 +269,17 @@ function renderGeneralSidebar(el) {
 
 function renderProjectsSidebar(el) {
   let html = '<div class="sec">Projects</div>';
-  html += `<button class="sb-btn ${selectedProjectId === null ? 'active' : ''}" onclick="selectProject(null)">
-    <span>All Projects</span><span class="sb-count">${projects.length}</span></button>`;
+  // In lite mode, hide "All Projects" — user must select a single project
+  if (!isLiteMode) {
+    html += `<button class="sb-btn ${selectedProjectId === null ? 'active' : ''}" onclick="selectProject(null)">
+      <span>All Projects</span><span class="sb-count">${projects.length}</span></button>`;
+  }
 
   projects.forEach((p) => {
     const active = selectedProjectId === p.id ? 'active' : '';
+    const ideIndicator = (p.active_in_ide || p.activeInIde) ? '<span class="ide-dot" title="Open in IDE">&#x1F7E2;</span>' : '';
     html += `<button class="sb-btn ${active}" onclick="selectProject(${p.id})" style="${selectedProjectId === p.id ? 'border-left:3px solid ' + esc(p.color) : ''}">
-      <span><span class="proj-dot" style="background:${esc(p.color)}"></span>${esc(p.name)}</span>
+      <span><span class="proj-dot" style="background:${esc(p.color)}"></span>${esc(p.name)}${ideIndicator}</span>
       <span class="sb-count">${p.clipCount || 0}</span></button>`;
   });
 
@@ -386,6 +445,194 @@ function renderHelpContent(el) {
 }
 
 // =====================================================================
+//  WORKFLOW TAB
+// =====================================================================
+
+async function loadWorkflowData() {
+  [workflowStatus, workflowChangelog, workflowPrompts, workflowAudits] = await Promise.all([
+    window.quickclip.getWorkflowStatus(),
+    window.quickclip.getWorkflowChangelog(),
+    window.quickclip.getWorkflowPrompts(),
+    window.quickclip.getWorkflowAudits(),
+  ]);
+}
+
+function renderWorkflowSidebar(el) {
+  const sections = [
+    { id: 'status', label: 'Status' },
+    { id: 'prompts', label: 'Prompts' },
+    { id: 'audits', label: 'Audits' },
+    { id: 'session', label: 'Session' },
+    { id: 'changelog', label: 'Changelog' },
+  ];
+  let html = '<div class="sec">Workflow</div>';
+  sections.forEach((s) => {
+    html += `<button class="sb-btn${workflowSection === s.id ? ' active' : ''}" onclick="workflowSection='${s.id}';renderAll()">${esc(s.label)}</button>`;
+  });
+  el.innerHTML = html;
+}
+
+function renderWorkflowContent(el) {
+  if (!workflowStatus || !workflowStatus.hasWorkflow) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Workflow Found</h2><p>No <code>.ai-workflow/</code> directory detected in this project.</p></div>';
+    return;
+  }
+  if (workflowSection === 'status') renderWorkflowStatus(el);
+  else if (workflowSection === 'prompts') renderWorkflowPrompts(el);
+  else if (workflowSection === 'audits') renderWorkflowAudits(el);
+  else if (workflowSection === 'session') renderWorkflowSession(el);
+  else if (workflowSection === 'changelog') renderWorkflowChangelog(el);
+}
+
+function renderWorkflowStatus(el) {
+  const s = workflowStatus;
+  const relayOn = s.relayMode === 'auto';
+  const auditOn = s.auditMode === 'on';
+  const pendingCount = workflowPrompts.filter((p) => p.status === 'CRAFTED' || p.status === 'SENT' || p.status === 'BUILDING').length;
+  const doneCount = workflowPrompts.filter((p) => p.status === 'DONE').length;
+
+  el.innerHTML = `
+    <div class="wf-status-grid">
+      <div class="wf-card wf-card-toggle" onclick="toggleRelay()" title="Click to toggle relay mode">
+        <div class="wf-card-label">Relay Mode</div>
+        <div class="wf-card-value">
+          <label class="wf-switch"><input type="checkbox" ${relayOn ? 'checked' : ''} tabindex="-1"><span class="wf-slider"></span></label>
+          <span class="wf-toggle-label">${relayOn ? 'Auto' : 'Review'}</span>
+        </div>
+        <div class="wf-card-hint">${relayOn ? 'Prompts relay immediately' : 'You review before sending'}</div>
+      </div>
+      <div class="wf-card wf-card-toggle" onclick="toggleAudit()" title="Click to toggle audit watch">
+        <div class="wf-card-label">Audit Watch</div>
+        <div class="wf-card-value">
+          <label class="wf-switch"><input type="checkbox" ${auditOn ? 'checked' : ''} tabindex="-1"><span class="wf-slider"></span></label>
+          <span class="wf-toggle-label">${auditOn ? 'On' : 'Off'}</span>
+        </div>
+        <div class="wf-card-hint">${auditOn ? 'Auto-audit files on save' : 'Manual auditing only'}</div>
+      </div>
+      <div class="wf-card wf-card-click${pendingCount > 0 ? ' wf-card-active' : ''}" onclick="showPromptFilter('pending')" title="View pending prompts">
+        <div class="wf-card-label">Pending Prompts</div>
+        <div class="wf-card-value wf-card-num">${pendingCount}</div>
+        <div class="wf-card-hint">${pendingCount > 0 ? 'Click to view details' : 'No prompts in progress'}</div>
+      </div>
+      <div class="wf-card wf-card-click${doneCount > 0 ? ' wf-card-active' : ''}" onclick="showPromptFilter('done')" title="View completed prompts">
+        <div class="wf-card-label">Completed Prompts</div>
+        <div class="wf-card-value wf-card-num">${doneCount}</div>
+        <div class="wf-card-hint">${doneCount > 0 ? 'Click to view details' : 'No prompts completed'}</div>
+      </div>
+    </div>
+    <div class="wf-section">
+      <h3>Agent Roles</h3>
+      <table class="wf-roles-table">
+        <tr><th>Role</th><th>Model</th><th>Purpose</th></tr>
+        <tr><td>Architect</td><td>Sonnet 4.6</td><td>Orchestrates, refines prompts, manages git</td></tr>
+        <tr><td>Builder</td><td>Opus 4.6</td><td>Writes all application code</td></tr>
+        <tr><td>Reviewer</td><td>Gemini 3.1 Pro</td><td>Audits diffs, structured JSON verdicts</td></tr>
+        <tr><td>Screener</td><td>Gemini 2.0 Flash</td><td>Pre-commit AI analysis</td></tr>
+      </table>
+    </div>
+  `;
+}
+
+async function toggleRelay() {
+  const next = await window.quickclip.toggleRelayMode();
+  workflowStatus.relayMode = next;
+  renderAll();
+}
+
+async function toggleAudit() {
+  const next = await window.quickclip.toggleAuditWatch();
+  workflowStatus.auditMode = next;
+  renderAll();
+}
+
+let workflowPromptFilter = null;
+
+function showPromptFilter(filter) {
+  workflowPromptFilter = filter;
+  workflowSection = 'prompts';
+  renderAll();
+}
+
+function renderWorkflowPrompts(el) {
+  const backBtn = '<div class="wf-back-bar"><button class="wf-back-btn" onclick="workflowSection=\'status\';renderAll()" title="Back to Workflow status">&#x2190; Back to Workflow</button></div>';
+  if (!workflowPrompts.length) {
+    el.innerHTML = backBtn + '<div class="wf-empty"><h2>No Prompts Yet</h2><p>Prompt tracking starts when the Architect generates prompt IDs.</p></div>';
+    return;
+  }
+  const isPending = (p) => p.status === 'CRAFTED' || p.status === 'SENT' || p.status === 'BUILDING';
+  const isDone = (p) => p.status === 'DONE';
+  let filtered = workflowPrompts;
+  if (workflowPromptFilter === 'pending') filtered = workflowPrompts.filter(isPending);
+  else if (workflowPromptFilter === 'done') filtered = workflowPrompts.filter(isDone);
+
+  let html = backBtn + '<div class="wf-prompt-filter-bar">';
+  html += `<button class="wf-filter-btn${!workflowPromptFilter ? ' active' : ''}" onclick="workflowPromptFilter=null;renderAll()">All (${workflowPrompts.length})</button>`;
+  html += `<button class="wf-filter-btn${workflowPromptFilter === 'pending' ? ' active' : ''}" onclick="workflowPromptFilter='pending';renderAll()">Pending (${workflowPrompts.filter(isPending).length})</button>`;
+  html += `<button class="wf-filter-btn${workflowPromptFilter === 'done' ? ' active' : ''}" onclick="workflowPromptFilter='done';renderAll()">Done (${workflowPrompts.filter(isDone).length})</button>`;
+  html += '</div>';
+
+  if (!filtered.length) {
+    html += `<div class="wf-empty"><p>No ${workflowPromptFilter || ''} prompts found.</p></div>`;
+    el.innerHTML = html;
+    return;
+  }
+  html += '<div class="wf-prompt-list">';
+  filtered.forEach((p) => {
+    const statusClass = p.status === 'DONE' ? 'wf-badge-green' : p.status === 'FAILED' ? 'wf-badge-red' : 'wf-badge-yellow';
+    const typeLabel = p.type === 'DIRECT' ? '<span class="wf-badge wf-badge-dim">direct</span> ' : '';
+    html += `<div class="wf-prompt-row">
+      <span class="wf-prompt-id">${esc(p.id)}</span>
+      ${typeLabel}<span class="wf-badge ${statusClass}">${esc(p.status)}</span>
+      <span class="wf-prompt-desc">${esc(p.description || '')}</span>
+      <span class="wf-prompt-time">${p.timestamp ? esc(p.timestamp) : ''}</span>
+    </div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function renderWorkflowAudits(el) {
+  if (!workflowAudits || workflowAudits.trim() === '' || !workflowAudits.includes('## ')) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Audits Yet</h2><p>Pre-feature audit findings will appear here after the next audit runs.</p></div>';
+    return;
+  }
+  // Parse markdown sections (## headings) into audit entries
+  const sections = workflowAudits.split(/^(?=## )/m).filter((s) => s.startsWith('## '));
+  let html = '<div class="wf-audit-list">';
+  sections.forEach((section, i) => {
+    const firstLine = section.substring(0, section.indexOf('\n')).replace(/^## /, '');
+    const body = section.substring(section.indexOf('\n') + 1).trim();
+    const id = 'audit-' + i;
+    html += `<div class="wf-audit-entry">
+      <div class="wf-audit-header" onclick="document.getElementById('${id}').classList.toggle('collapsed')">
+        <span class="wf-audit-title">${esc(firstLine)}</span>
+        <span class="wf-audit-arrow">&#x25BC;</span>
+      </div>
+      <div class="wf-audit-body" id="${id}"><pre>${esc(body)}</pre></div>
+    </div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function renderWorkflowSession(el) {
+  const session = workflowStatus?.session;
+  if (!session) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Session</h2><p>SESSION.md not found.</p></div>';
+    return;
+  }
+  el.innerHTML = `<div class="wf-markdown"><pre>${esc(session)}</pre></div>`;
+}
+
+function renderWorkflowChangelog(el) {
+  if (!workflowChangelog) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Changelog</h2><p>CHANGELOG.md not found.</p></div>';
+    return;
+  }
+  el.innerHTML = `<div class="wf-markdown"><pre>${esc(workflowChangelog)}</pre></div>`;
+}
+
+// =====================================================================
 //  MAIN CONTENT
 // =====================================================================
 
@@ -396,6 +643,7 @@ function renderContent() {
   else if (activeTab === 'projects') renderProjectsContent(el);
   else if (activeTab === 'settings') { renderSettingsContent(el); loadPromptBlocks(); loadAuditLog(); }
   else if (activeTab === 'help') renderHelpContent(el);
+  else if (activeTab === 'workflow') { loadWorkflowData().then(() => renderWorkflowContent(el)); }
 }
 
 // ── General Notes ──
@@ -670,18 +918,37 @@ function renderProjectDetail(el) {
   if (!proj) { selectProject(null); return; }
 
   let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
+  const completedCount = projectClips.filter((c) => c.completedAt).length;
+  if (hideCompleted) {
+    projectClips = projectClips.filter((c) => !c.completedAt);
+  }
+
+  const ideActive = proj.active_in_ide || proj.activeInIde;
 
   let html = `<div class="project-detail-header">
     <div>
       <button class="back-btn" onclick="selectProject(null)">&larr; All Projects</button>
       <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)}</h2>
+      ${ideActive ? '<span class="ide-badge">IN IDE</span>' : ''}
     </div>
     <div class="project-detail-actions">
+      <button class="sb-btn-action ${ideActive ? 'ide-active' : ''}" onclick="toggleIde(${proj.id})" title="${ideActive ? 'Mark as not open in IDE' : 'Mark as open in IDE'}">
+        ${ideActive ? '&#x1F7E2; In IDE' : '&#x2B55; Open in IDE'}
+      </button>
       <button class="sb-btn-action summarize-btn" onclick="showProjectSummary(${proj.id})" title="Generate a side-by-side summary of all notes">&#x2728; Summarize</button>
       <button class="sb-btn-action" onclick="editProject(${proj.id})">Edit</button>
       <button class="sb-btn-action danger" onclick="confirmDeleteProject(${proj.id})">Delete</button>
     </div>
   </div>`;
+
+  if (completedCount > 0) {
+    html += `<div class="completed-toggle">
+      <label class="toggle-label" title="Show or hide completed notes">
+        <input type="checkbox" ${hideCompleted ? '' : 'checked'} onchange="toggleCompleted()" />
+        <span>Show completed (${completedCount})</span>
+      </label>
+    </div>`;
+  }
 
   if (proj.description) {
     html += `<div class="project-desc">${esc(proj.description)}</div>`;
@@ -754,8 +1021,23 @@ function _doSearchProject() {
   loadDiskImages(el);
 }
 
+function toggleCompleted() {
+  hideCompleted = !hideCompleted;
+  renderAll();
+}
+
+async function toggleIde(projectId) {
+  await window.quickclip.toggleProjectIde(projectId);
+}
+
 function selectProject(id) {
+  // In lite mode, must always have a project selected
+  if (isLiteMode && id === null) return;
   selectedProjectId = id;
+  // Sync active project setting in lite mode
+  if (isLiteMode && id !== null) {
+    window.quickclip.setLiteActiveProject(id);
+  }
   renderAll();
 }
 
@@ -1389,13 +1671,22 @@ function renderClipCard(c, inProject, allKnownTags) {
 
   // Screenshot
   if (c.image === '__on_disk__') {
+    html += `<div class="img-wrap">`;
     html += `<img data-clip-id="${id}" class="img-loading" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse screenshot" />`;
+    html += `<button class="img-copy-btn" onclick="event.stopPropagation();copyClipImage('${id}',this)" title="Copy image to clipboard">&#x1F4CB;</button>`;
+    html += `</div>`;
   } else if (c.image) {
+    html += `<div class="img-wrap">`;
     html += `<img src="${esc(c.image)}" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse screenshot" />`;
+    html += `<button class="img-copy-btn" onclick="event.stopPropagation();copyClipImage('${id}',this)" title="Copy image to clipboard">&#x1F4CB;</button>`;
+    html += `</div>`;
   }
 
-  // Comment
+  // Comment (flows beside the thumbnail)
   if (c.comment) html += `<div class="comment copyable" onclick="copyInline(this, 'comment', '${id}')">${esc(c.comment)}<span class="copy-hint" title="Click to copy comment">&#x1F4CB;</span></div>`;
+
+  // Clear float so everything below sits under the thumbnail
+  html += `<div class="clip-clearfix"></div>`;
 
   // AI summary (filing label)
   if (c.aiSummary) html += `<div class="ai-summary copyable" onclick="copyInline(this, 'aiSummary', '${id}')"><span class="ai-label">AI Summary</span> ${esc(c.aiSummary)}<span class="copy-hint" title="Click to copy AI summary">&#x1F4CB;</span></div>`;
@@ -1533,6 +1824,14 @@ async function copyPrompt(id) {
   const clip = clips.find(c => c.id === id);
   if (clip && clip.aiFixPrompt) {
     await navigator.clipboard.writeText(clip.aiFixPrompt);
+  }
+}
+
+async function copyClipImage(id, btn) {
+  const ok = await window.quickclip.copyImageToClipboard(id);
+  if (ok) {
+    btn.classList.add('img-copy-flash');
+    setTimeout(() => btn.classList.remove('img-copy-flash'), 800);
   }
 }
 

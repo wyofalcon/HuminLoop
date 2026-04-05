@@ -10,6 +10,7 @@ CREATE TABLE projects (
     description TEXT DEFAULT '',
     repo_path   VARCHAR(500) DEFAULT NULL,
     color       VARCHAR(7) DEFAULT '#3b82f6',
+    active_in_ide BOOLEAN NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -62,6 +63,7 @@ CREATE TABLE clips (
     ai_fix_prompt TEXT DEFAULT NULL,
     deleted_at  TIMESTAMPTZ DEFAULT NULL,
     timestamp   BIGINT NOT NULL,
+    source      VARCHAR(10) NOT NULL DEFAULT 'full' CHECK (source IN ('full', 'lite')),
     window_title  TEXT DEFAULT NULL,
     process_name  VARCHAR(255) DEFAULT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),

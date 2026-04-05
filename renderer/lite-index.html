@@ -10,7 +10,8 @@
     <div class="titlebar">
       <div class="titlebar-left">
         <span class="app-name">Sciurus Lite</span>
-        <select id="projectSelect" class="project-select">
+        <label for="projectSelect" class="sr-only">Active project</label>
+        <select id="projectSelect" class="project-select" aria-label="Active project">
           <option value="">Select project...</option>
         </select>
       </div>
@@ -22,19 +23,19 @@
 
     <div id="clipCard" class="clip-card">
       <div class="screenshot-wrap">
-        <img id="clipImage" class="clip-image" style="display:none;">
+        <img id="clipImage" class="clip-image hidden" alt="Screenshot">
         <div id="emptyState" class="empty-state">
           <div class="empty-title">Take a screenshot to get started</div>
           <div class="empty-hint">Ctrl+Shift+Q or use the toolbar</div>
         </div>
       </div>
 
-      <div id="noteSection" class="note-section" style="display:none;">
+      <div id="noteSection" class="note-section hidden">
         <div class="section-label">Note</div>
         <div id="clipNote" class="clip-note"></div>
       </div>
 
-      <div id="promptSection" class="prompt-section" style="display:none;">
+      <div id="promptSection" class="prompt-section hidden">
         <div class="prompt-header">
           <span class="section-label prompt-label">Generated Prompt</span>
           <button id="copyBtn" class="copy-btn" onclick="copyPrompt()">Copy</button>
@@ -42,7 +43,7 @@
         <div id="promptContent" class="prompt-content"></div>
       </div>
 
-      <div id="promptLoading" class="prompt-loading" style="display:none;">
+      <div id="promptLoading" class="prompt-loading hidden">
         <div class="spinner"></div>
         <span>Generating prompt...</span>
       </div>
@@ -54,7 +55,7 @@
       <button class="nav-btn" id="nextBtn" onclick="navigate(1)" disabled>&#x25B6;</button>
     </div>
 
-    <div id="projectOverlay" class="project-overlay" style="display:none;">
+    <div id="projectOverlay" class="project-overlay hidden">
       <div class="overlay-content">
         <h3>Choose your active project</h3>
         <p class="overlay-hint">Lite mode focuses on one project at a time. All captures and AI prompts will use this project's context.</p>

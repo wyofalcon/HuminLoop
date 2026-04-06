@@ -1,5 +1,5 @@
 /**
- * Sciurus — PostgreSQL data access layer
+ * HuminLoop — PostgreSQL data access layer
  * Replaces electron-store + Google Sheets with a local Docker PostgreSQL database.
  */
 
@@ -16,9 +16,9 @@ async function init(maxAttempts = 15) {
   pool = new Pool({
     host: process.env.POSTGRES_HOST || 'localhost',
     port: parseInt(process.env.POSTGRES_PORT || '5432', 10),
-    database: process.env.POSTGRES_DB || 'sciurus',
-    user: process.env.POSTGRES_USER || 'sciurus',
-    password: process.env.POSTGRES_PASSWORD || 'sciurus_dev',
+    database: process.env.POSTGRES_DB || 'huminloop',
+    user: process.env.POSTGRES_USER || 'huminloop',
+    password: process.env.POSTGRES_PASSWORD || 'huminloop_dev',
     max: 10,
     idleTimeoutMillis: 30000,
   });
@@ -28,12 +28,12 @@ async function init(maxAttempts = 15) {
     try {
       const client = await pool.connect();
       client.release();
-      console.log('[Sciurus DB] Connected to PostgreSQL');
+      console.log('[HuminLoop DB] Connected to PostgreSQL');
       await runMigrations();
       await refreshCategoryCache();
       return true;
     } catch (err) {
-      console.log(`[Sciurus DB] Connection attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+      console.log(`[HuminLoop DB] Connection attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
       if (attempt < maxAttempts) await sleep(2000);
     }
   }
@@ -41,7 +41,7 @@ async function init(maxAttempts = 15) {
   // Clean up the pool so it doesn't hang
   try { await pool.end(); } catch {}
   pool = null;
-  console.error(`[Sciurus DB] Could not connect to PostgreSQL after ${maxAttempts} attempts`);
+  console.error(`[HuminLoop DB] Could not connect to PostgreSQL after ${maxAttempts} attempts`);
   return false;
 }
 
@@ -85,11 +85,13 @@ async function runMigrations() {
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS summarize_count INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS source VARCHAR(10) NOT NULL DEFAULT 'full'`,
     `ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_in_ide BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS ide VARCHAR(50) DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS sent_to_ide_at TIMESTAMPTZ DEFAULT NULL`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }
   }
-  console.log('[Sciurus DB] Migrations complete');
+  console.log('[HuminLoop DB] Migrations complete');
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +157,7 @@ const CLIPS_BASE_QUERY = `
          c.project_id, p.name AS "projectName",
          c.tags, c.ai_summary AS "aiSummary",
          c.ai_fix_prompt AS "aiFixPrompt",
+         c.sent_to_ide_at AS "sentToIdeAt",
          c.url, c.status, c.timestamp,
          c.completed_at AS "completedAt",
          c.archived,
@@ -246,7 +249,7 @@ async function saveClip(clip) {
 }
 
 async function updateClip(id, updates) {
-  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived', 'summarize_count'];
+  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived', 'summarize_count', 'sent_to_ide_at'];
   const setClauses = [];
   const params = [];
   let paramIdx = 1;
@@ -300,6 +303,9 @@ async function updateClip(id, updates) {
     } else if (key === 'summarize_count') {
       setClauses.push(`summarize_count = $${paramIdx++}`);
       params.push(val);
+    } else if (key === 'sent_to_ide_at') {
+      setClauses.push(`sent_to_ide_at = $${paramIdx++}`);
+      params.push(val);
     }
   }
 
@@ -348,7 +354,7 @@ async function migrateArchivedToTrash() {
   const { rowCount } = await pool.query(
     `UPDATE clips SET deleted_at = NOW(), archived = false WHERE archived = true AND deleted_at IS NULL`
   );
-  if (rowCount > 0) console.log(`[Sciurus DB] Migrated ${rowCount} archived clip(s) to trash`);
+  if (rowCount > 0) console.log(`[HuminLoop DB] Migrated ${rowCount} archived clip(s) to trash`);
   return rowCount;
 }
 
@@ -390,10 +396,10 @@ async function getProject(id) {
 
 async function createProject(data) {
   const { rows } = await pool.query(
-    `INSERT INTO projects (name, description, repo_path, color)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO projects (name, description, repo_path, color, ide)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [data.name, data.description || '', data.repo_path || null, data.color || '#3b82f6']
+    [data.name, data.description || '', data.repo_path || null, data.color || '#3b82f6', data.ide || null]
   );
   return rows[0];
 }
@@ -408,6 +414,7 @@ async function updateProject(id, data) {
   if (data.repo_path !== undefined) { fields.push(`repo_path = $${idx++}`); params.push(data.repo_path); }
   if (data.color !== undefined) { fields.push(`color = $${idx++}`); params.push(data.color); }
   if (data.active_in_ide !== undefined) { fields.push(`active_in_ide = $${idx++}`); params.push(data.active_in_ide); }
+  if (data.ide !== undefined) { fields.push(`ide = $${idx++}`); params.push(data.ide); }
 
   if (fields.length === 0) return null;
 
@@ -535,11 +542,11 @@ async function migrateFromStore(storeData) {
 
     await client.query('COMMIT');
     await refreshCategoryCache();
-    console.log(`[Sciurus DB] Migrated ${clips.length} clips and ${categories.length} categories`);
+    console.log(`[HuminLoop DB] Migrated ${clips.length} clips and ${categories.length} categories`);
     return true;
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('[Sciurus DB] Migration failed:', err.message);
+    console.error('[HuminLoop DB] Migration failed:', err.message);
     return false;
   } finally {
     client.release();

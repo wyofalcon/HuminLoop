@@ -36,7 +36,7 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `style`, `perf`
 - Never modify `SESSION.md` — the prepare-commit-msg hook manages it
 - If a task is unclear, ask — don't guess
 
-## Sciurus-Specific Rules
+## HuminLoop-Specific Rules
 
 - New DB operations must go in BOTH `db-pg.js` and `db-sqlite.js`, exposed through `db.js`
 - New externally-accessible features need 3 touchpoints: IPC handler (`main`), HTTP endpoint (`api`), MCP tool (`mcp`)

@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a floating always-on-top toolbar with ZoomIT-style screen annotation (3 colors) and region-select snippet capture that feeds directly into Sciurus.
+**Goal:** Add a floating always-on-top toolbar with ZoomIT-style screen annotation (3 colors) and region-select snippet capture that feeds directly into HuminLoop.
 
 **Architecture:** Two new Electron `BrowserWindow` instances — a compact draggable toolbar and a fullscreen transparent overlay for drawing/capture. The overlay uses an HTML5 `<canvas>` for freehand annotation. Screenshots are captured via `desktopCapturer` in main process, composited with canvas annotations, then cropped to a user-selected region and sent to the existing capture popup via IPC.
 
-**Tech Stack:** Electron 33 (`BrowserWindow`, `desktopCapturer`, `screen`, `ipcMain`), HTML5 Canvas API, existing Sciurus IPC/preload patterns.
+**Tech Stack:** Electron 33 (`BrowserWindow`, `desktopCapturer`, `screen`, `ipcMain`), HTML5 Canvas API, existing HuminLoop IPC/preload patterns.
 
 **Spec:** `docs/superpowers/specs/2026-04-02-floating-annotation-toolbar-design.md`
 
@@ -50,7 +50,7 @@
 <html><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;">
-<title>Sciurus Toolbar</title>
+<title>HuminLoop Toolbar</title>
 <link rel="stylesheet" href="toolbar.css">
 </head><body>
 
@@ -61,7 +61,7 @@
     <button class="dot dot-green" onclick="enterDraw('green')" title="Draw — Green (add/insert)"></button>
     <button class="dot dot-pink" onclick="enterDraw('pink')" title="Draw — Pink (reference)"></button>
   </div>
-  <button class="tb-btn nd" onclick="openSciurus()" title="Open Sciurus main window">Sciurus</button>
+  <button class="tb-btn nd" onclick="openHuminLoop()" title="Open HuminLoop main window">HuminLoop</button>
   <button class="tb-btn tb-capture nd" onclick="captureSnippet()" title="Capture a screen region">Capture</button>
   <button class="tb-icon nd" onclick="minimizeToolbar()" title="Minimize toolbar">&#x2212;</button>
   <button class="tb-icon nd" onclick="closeToolbar()" title="Close toolbar">&#x2715;</button>
@@ -233,7 +233,7 @@ function enterDraw(color) {
 
 // ── Actions ──
 
-function openSciurus() {
+function openHuminLoop() {
   window.quickclip.showMain();
 }
 
@@ -482,7 +482,7 @@ In `src/main.js`, in the `app.on('will-quit', ...)` handler (around line 951), a
 - [ ] **Step 8: Verify — launch app and confirm toolbar appears**
 
 Run: `npm run dev`
-Expected: App launches, toolbar appears as a small dark floating bar at the top-center of the screen. It should be draggable, stay on top, and show "Sciurus!" as the project name. The Sciurus button should open the main window. Minimize should shrink to a pill, clicking the pill should restore. Close should hide the toolbar. "Show Toolbar" in tray menu should bring it back.
+Expected: App launches, toolbar appears as a small dark floating bar at the top-center of the screen. It should be draggable, stay on top, and show "HuminLoop" as the project name. The HuminLoop button should open the main window. Minimize should shrink to a pill, clicking the pill should restore. Close should hide the toolbar. "Show Toolbar" in tray menu should bring it back.
 
 - [ ] **Step 9: Commit**
 
@@ -507,7 +507,7 @@ git commit -m "feat(toolbar): add toolbar window creation, IPC handlers, tray me
 <html><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;">
-<title>Sciurus Overlay</title>
+<title>HuminLoop Overlay</title>
 <link rel="stylesheet" href="overlay.css">
 </head><body>
 <canvas id="drawCanvas"></canvas>
@@ -954,7 +954,7 @@ ipcMain.handle('snippet-captured', (_, dataUrl) => {
   destroyOverlayWindow();
 
   // Send the snippet to the capture popup (same flow as clipboard watcher)
-  const meta = preOverlayWindowMeta || { title: 'Screen Capture', processName: 'Sciurus Toolbar' };
+  const meta = preOverlayWindowMeta || { title: 'Screen Capture', processName: 'HuminLoop Toolbar' };
   preOverlayWindowMeta = null;
   createCaptureWindow(dataUrl, meta);
 });
@@ -1323,7 +1323,7 @@ Run: `npm run dev`
 
 Verify all of these:
 1. Toolbar appears at top-center on launch
-2. Toolbar shows project name ("Sciurus!")
+2. Toolbar shows project name ("HuminLoop")
 3. Toolbar is draggable, stays on top of other windows
 4. Clicking a color dot → fullscreen overlay, crosshair cursor, freehand drawing works
 5. Keys `1`/`2`/`3` switch pen color during draw mode
@@ -1331,7 +1331,7 @@ Verify all of these:
 7. `S` during draw mode → screenshot captured, region-select scrim appears
 8. Drag rectangle → capture popup opens with annotated cropped image
 9. "Capture" button without draw mode → direct region select
-10. "Sciurus" button opens main window
+10. "HuminLoop" button opens main window
 11. Minimize (−) → small pill icon; click pill → toolbar restores
 12. Close (×) → toolbar hidden; tray menu "Show Toolbar" brings it back
 13. Drag toolbar to new position, restart app → toolbar remembers position

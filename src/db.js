@@ -1,5 +1,5 @@
 /**
- * Sciurus — Database backend switcher
+ * HuminLoop — Database backend switcher
  * Tries PostgreSQL first (for dev/power users with Docker).
  * Falls back to SQLite (zero-setup, for distributed builds).
  * Set DB_BACKEND=pg or DB_BACKEND=sqlite in .env to force one.
@@ -25,11 +25,11 @@ async function init() {
       if (ok) {
         backend = pg;
         backendName = 'postgresql';
-        console.log('[Sciurus DB] Using PostgreSQL backend');
+        console.log('[HuminLoop DB] Using PostgreSQL backend');
         return true;
       }
     } catch (e) {
-      console.log('[Sciurus DB] PostgreSQL unavailable:', e.message);
+      console.log('[HuminLoop DB] PostgreSQL unavailable:', e.message);
     }
   }
 
@@ -37,16 +37,16 @@ async function init() {
   if (force !== 'pg') {
     try {
       const sqlite = require('./db-sqlite');
-      const dbPath = path.join(app.getPath('userData'), 'sciurus.db');
+      const dbPath = path.join(app.getPath('userData'), 'huminloop.db');
       const ok = await sqlite.init(dbPath);
       if (ok) {
         backend = sqlite;
         backendName = 'sqlite';
-        console.log('[Sciurus DB] Using SQLite backend');
+        console.log('[HuminLoop DB] Using SQLite backend');
         return true;
       }
     } catch (e) {
-      console.log('[Sciurus DB] SQLite unavailable:', e.message);
+      console.log('[HuminLoop DB] SQLite unavailable:', e.message);
     }
   }
 
@@ -74,11 +74,8 @@ module.exports = {
   purgeTrash: (...a) => backend.purgeTrash(...a),
   // Categories
   getCategories: (...a) => backend.getCategories(...a),
-  getCategoryId: (...a) => backend.getCategoryId(...a),
   getCategoryName: (...a) => backend.getCategoryName(...a),
   saveCategory: (...a) => backend.saveCategory(...a),
-  deleteCategory: (...a) => backend.deleteCategory(...a),
-  refreshCategoryCache: (...a) => backend.refreshCategoryCache(...a),
   // Projects
   getProjects: (...a) => backend.getProjects(...a),
   getProject: (...a) => backend.getProject(...a),

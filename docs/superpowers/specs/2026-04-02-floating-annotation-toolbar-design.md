@@ -14,8 +14,8 @@ A floating always-on-top toolbar that gives users ZoomIT-like screen annotation 
 - 3 color pen buttons (Red, Green, Pink/Purple) matching ZoomIT annotation colors
 - Freehand drawing on a transparent fullscreen overlay above all other windows
 - Region-select snippet capture that composites annotations onto the screenshot
-- Captured snippet is sent directly to Sciurus as a new clip (via existing save-clip flow)
-- Button to open/focus the main Sciurus window
+- Captured snippet is sent directly to HuminLoop as a new clip (via existing save-clip flow)
+- Button to open/focus the main HuminLoop window
 - Displays the current workflow project name
 - Launches on app start alongside the tray icon
 
@@ -42,7 +42,7 @@ Small frameless `BrowserWindow`, always-on-top, draggable.
 | Red dot | Enters draw mode with red pen |
 | Green dot | Enters draw mode with green pen |
 | Pink dot | Enters draw mode with pink/purple pen |
-| "Sciurus" button | Opens/focuses the main window |
+| "HuminLoop" button | Opens/focuses the main window |
 | "Capture" button | Enters snippet region-select mode directly (no drawing) |
 | Minimize (−) | Collapses toolbar to a small floating pill icon. Click pill to restore |
 | Close (x) | Hides the toolbar (reopenable from tray menu) |
@@ -82,7 +82,7 @@ Fullscreen frameless transparent `BrowserWindow`, created on demand when a color
 2. `desktopCapturer.getSources({ types: ['screen'] })` grabs the full screen as a `NativeImage` — captures desktop but NOT the overlay canvas
 3. If annotations exist on the canvas, composite them: draw the screenshot onto an offscreen canvas, then draw the annotation canvas on top
 4. Overlay switches to region-select mode — screen image displayed with dark scrim, user drags a rectangle to define crop area
-5. Cropped result sent directly to Sciurus via IPC (`snippet-captured` with image data URL)
+5. Cropped result sent directly to HuminLoop via IPC (`snippet-captured` with image data URL)
 6. Main process receives snippet, creates capture popup with the image (same as clipboard-detected screenshot flow)
 7. Overlay closes
 

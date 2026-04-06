@@ -27,7 +27,7 @@ feature/your-task  →  master (PR)
 - **Main process:** `src/main.js` — Electron main, tray, hotkey, IPC, clipboard watcher, HTTP API
 - **Renderer:** `renderer/` — 3 windows (viewer, capture, wizard), vanilla JS, no framework
 - **Modules:** `src/` — db.js (switcher), db-pg.js, db-sqlite.js, ai.js (Gemini 2.5 Flash), rules.js, images.js, api-server.js, window-info.js
-- **MCP server:** `mcp-server/` — separate Node process, stdio transport, bridges Claude Code to Sciurus HTTP API
+- **MCP server:** `mcp-server/` — separate Node process, stdio transport, bridges Claude Code to HuminLoop HTTP API
 - **Workflow:** `workflow/` — templates, scripts, config for multi-agent dev orchestration
 - **AI:** Gemini 2.5 Flash via API key or Vertex AI (native JWT, no SDK deps)
 - **Infra:** Docker Compose (PostgreSQL 16 on port 5433), SQLite fallback, Electron 33

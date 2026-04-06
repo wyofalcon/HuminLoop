@@ -1,7 +1,7 @@
 {
-  "name": "sciurus-mcp-server",
+  "name": "huminloop-mcp-server",
   "version": "1.0.0",
-  "description": "MCP server for Sciurus — AI-powered knowledge capture + dev workflow",
+  "description": "MCP server for HuminLoop — AI-powered knowledge capture + dev workflow",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {

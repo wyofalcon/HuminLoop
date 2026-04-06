@@ -176,7 +176,7 @@ User (! prefix) → Architect (refines) → Builder (codes) → Screener (pre-co
 
 ---
 
-## Sciurus-Specific Context
+## HuminLoop-Specific Context
 
 - **Product:** ADHD-friendly knowledge capture for devs using AI coding tools
 - **Primary user flow:** Snipping Tool screenshot → clipboard watcher → capture popup → note → AI categorize

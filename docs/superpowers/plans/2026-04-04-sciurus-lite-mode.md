@@ -1,14 +1,14 @@
-# Sciurus Lite Mode Implementation Plan
+# HuminLoop Lite Mode Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a toggleable "Lite" mode to Sciurus — a single-clip-at-a-time UI focused on fast AI prompt generation from annotated screenshots.
+**Goal:** Add a toggleable "Lite" mode to HuminLoop — a single-clip-at-a-time UI focused on fast AI prompt generation from annotated screenshots.
 
 **Architecture:** Same Electron app with a mode toggle (`app_mode` setting). Lite mode uses separate renderer files (`lite-index.*`, `lite-capture.*`) while sharing all main process modules (db, ai, rules, images). A new `source` column on clips lets lite mode filter to its own clips. The overlay gets a text annotation tool. A shared workflow context reader feeds project session data into AI prompt generation.
 
 **Tech Stack:** Electron, better-sqlite3, pg, Node.js fs, existing Gemini AI module
 
-**Spec:** `docs/superpowers/specs/2026-04-04-sciurus-lite-mode-design.md`
+**Spec:** `docs/superpowers/specs/2026-04-04-sciurus-lite-mode-design.md` (file retains original name)
 
 ---
 
@@ -305,7 +305,7 @@ async function generateLitePrompt(comment, imageDataURL, windowMeta = {}, projec
     // The response should be plain text prompt — strip any wrapping quotes or markdown
     return result.replace(/^["'`]+|["'`]+$/g, '').trim();
   } catch (e) {
-    console.error('[Sciurus AI] Lite prompt generation failed:', e.message);
+    console.error('[HuminLoop AI] Lite prompt generation failed:', e.message);
     return null;
   }
 }
@@ -579,7 +579,7 @@ git commit -m "feat(overlay): add text annotation tool with colored on-screen ty
 
 - [ ] **Step 1: Add T button to `renderer/toolbar.html`**
 
-In the toolbar div, after the pink color dot and before the Sciurus button, add:
+In the toolbar div, after the pink color dot and before the HuminLoop button, add:
 
 ```html
       <button class="tb-btn text-btn" id="textBtn" title="Text tool (T)" onclick="toggleTextMode()">T</button>
@@ -739,7 +739,7 @@ async function createMainWindow() {
 
   mainWindow = new BrowserWindow({
     ...windowSize, show: false,
-    title: mode === 'lite' ? 'Sciurus Lite' : 'Sciurus',
+    title: mode === 'lite' ? 'HuminLoop Lite' : 'HuminLoop',
     backgroundColor: '#13131f',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -748,7 +748,7 @@ async function createMainWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', htmlFile));
-  if (process.env.SCIURUS_DEV === '1') mainWindow.webContents.openDevTools();
+  if (process.env.HUMINLOOP_DEV === '1') mainWindow.webContents.openDevTools();
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
@@ -886,11 +886,11 @@ async function autoCategorizeLite(clipId, comment, imageData, windowTitle, proce
     if (prompt) {
       await db.updateClip(clipId, { aiFixPrompt: prompt });
       notifyMainWindow('clips-changed');
-      console.log(`[Sciurus] Lite prompt generated for clip ${clipId}`);
+      console.log(`[HuminLoop] Lite prompt generated for clip ${clipId}`);
       addAuditEntry('ai', `Lite prompt generated for clip ${clipId}`);
     }
   } catch (e) {
-    console.error('[Sciurus] Lite prompt generation failed:', e.message);
+    console.error('[HuminLoop] Lite prompt generation failed:', e.message);
   }
 }
 ```
@@ -903,13 +903,13 @@ In the save-clip handler (around lines 568-574), change the AI trigger section:
 if ((clip.comment || imageData) && ai.isEnabled()) {
   const aiMode = await getAppMode();
   if (aiMode === 'lite') {
-    console.log(`[Sciurus] Starting lite prompt generation for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
+    console.log(`[HuminLoop] Starting lite prompt generation for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
     autoCategorizeLite(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
-      .catch(e => console.error('[Sciurus] Lite prompt background error:', e.message));
+      .catch(e => console.error('[HuminLoop] Lite prompt background error:', e.message));
   } else {
-    console.log(`[Sciurus] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
+    console.log(`[HuminLoop] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
     autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
-      .catch(e => console.error('[Sciurus] Auto-categorize background error:', e.message));
+      .catch(e => console.error('[HuminLoop] Auto-categorize background error:', e.message));
   }
 }
 ```
@@ -933,7 +933,7 @@ function rebuildTrayMenu() {
   getAppMode().then(mode => {
     const modeLabel = mode === 'lite' ? 'Switch to Full Mode' : 'Switch to Lite Mode';
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Open Sciurus', click: () => { mainWindow.show(); mainWindow.focus(); } },
+      { label: 'Open HuminLoop', click: () => { mainWindow.show(); mainWindow.focus(); } },
       { label: 'Quick Capture', click: () => createCaptureWindow(null) },
       { label: 'Show Toolbar', click: () => createToolbarWindow() },
       { type: 'separator' },
@@ -959,7 +959,7 @@ function rebuildTrayMenu() {
   getAppMode().then(mode => {
     const modeLabel = mode === 'lite' ? 'Switch to Full Mode' : 'Switch to Lite Mode';
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Open Sciurus', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+      { label: 'Open HuminLoop', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
       { label: 'Quick Capture', click: () => createCaptureWindow(null) },
       { label: 'Show Toolbar', click: () => createToolbarWindow() },
       { type: 'separator' },
@@ -985,7 +985,7 @@ function rebuildTrayMenu() {
 function createTray() {
   const icon = nativeImage.createFromDataURL(FALLBACK_TRAY_ICON);
   tray = new Tray(icon);
-  tray.setToolTip('Sciurus');
+  tray.setToolTip('HuminLoop');
   rebuildTrayMenu();
   tray.on('click', () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
 }
@@ -1316,7 +1316,7 @@ git commit -m "feat: add lite capture popup with minimal screenshot + note + sav
     <!-- Title bar -->
     <div class="titlebar">
       <div class="titlebar-left">
-        <span class="app-name">Sciurus Lite</span>
+        <span class="app-name">HuminLoop Lite</span>
         <select id="projectSelect" class="project-select">
           <option value="">Select project...</option>
         </select>

@@ -70,7 +70,7 @@ window.quickclip.onTextModeExited(() => {
 
 // ── Actions ──
 
-function openSciurus() {
+function openHuminLoop() {
   window.quickclip.showMain();
 }
 

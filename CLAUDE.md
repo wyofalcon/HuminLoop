@@ -22,17 +22,17 @@ The audit agent should report findings concisely. If duplicates or dead code are
 - Recommendation
 ```
 
-These findings are visible in the Workflow tab's "Audits" section inside Sciurus.
+These findings are visible in the Workflow tab's "Audits" section inside HuminLoop.
 
 ## Project Overview
 
-Sciurus — an ADHD-friendly Electron app for AI-powered knowledge capture. Screenshot → note → AI categorization. Designed for developers using AI-assisted coding tools who need rapid issue capture without breaking flow.
+HuminLoop — an ADHD-friendly Electron app for AI-powered knowledge capture. Screenshot → note → AI categorization. Designed for developers using AI-assisted coding tools who need rapid issue capture without breaking flow.
 
 ## Commands
 
 ```bash
 npm start          # Launch app (uses scripts/launch.js)
-npm run dev        # Launch with DevTools auto-open (SCIURUS_DEV=1)
+npm run dev        # Launch with DevTools auto-open (HUMINLOOP_DEV=1)
 npm run build:win  # Windows NSIS installer → dist/
 npm run build:linux # Linux AppImage + deb → dist/
 npm run build:mac  # macOS .dmg → dist/
@@ -101,7 +101,7 @@ Toggleable via tray menu ("Switch to Lite/Full Mode"). Stored as `app_mode` sett
 
 Floating annotation toolbar + fullscreen transparent overlay for drawing on screen before capture.
 
-- **Toolbar** (`renderer/toolbar.*`) — color dots (red/green/pink), T button (text mode), Capture, Sciurus button, minimize/close. Saves position via DB settings. Always-on-top, frameless.
+- **Toolbar** (`renderer/toolbar.*`) — color dots (red/green/pink), T button (text mode), Capture, HuminLoop button, minimize/close. Saves position via DB settings. Always-on-top, frameless.
 - **Overlay** (`renderer/overlay.*`) — fullscreen transparent canvas. Freehand drawing in active color. Text tool: click to place cursor, type, Enter commits, Escape cancels. Region select mode for snippets. Right-click exits draw mode.
 - **IPC relay** — toolbar↔overlay communication goes through main process: `set-color`, `draw-mode-exited`, `toggle-text-mode`, `text-mode-changed`, `text-mode-exited`
 
@@ -122,6 +122,12 @@ Floating annotation toolbar + fullscreen transparent overlay for drawing on scre
 5. `autoCategorize()` runs for summary/tags + `autoCategorizeLite()` runs for focused coding prompt (parallel)
 6. Prompt appears in clip card, ready to copy into AI coding tool
 
+**Send to IDE (staging file bridge):**
+1. User clicks "Send to IDE" on a clip prompt (or "Combine & Send to IDE" for multi-select)
+2. HuminLoop writes `IDE_PROMPT.md` (+ optional `ide-prompt-image.png`) to `{repo_path}/.ai-workflow/context/`
+3. IDE agent calls MCP `get_pending_prompt` tool → reads prompt + image → files are deleted (one-shot delivery)
+4. Agent receives prompt text + screenshot as MCP content blocks and can act on it immediately
+
 ### IPC Pattern
 
 All renderer↔main communication goes through `preload.js` which exposes `window.quickclip.*` (~50 methods). Context isolation is enforced — no `nodeIntegration`.
@@ -132,9 +138,9 @@ All renderer↔main communication goes through `preload.js` which exposes `windo
 
 ### Local HTTP API (`src/api-server.js`)
 
-REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatically by main.js after DB/AI init. Mirrors IPC handlers so external tools can access Sciurus.
+REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatically by main.js after DB/AI init. Mirrors IPC handlers so external tools can access HuminLoop.
 
-- **Port:** `SCIURUS_API_PORT` env var, default `7277`
+- **Port:** `HUMINLOOP_API_PORT` env var, default `7277`
 - **Endpoints:**
   - `/api/health` — GET health check
   - `/api/clips` — GET list, POST create
@@ -149,6 +155,9 @@ REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatic
   - `/api/settings` — GET read, PATCH update
   - `/api/ai/search` — POST semantic search
   - `/api/ai/summarize` — POST summarize clips
+  - `/api/clips/:id/image` — GET clip screenshot as data URL
+  - `/api/clips/:id/send-to-ide` — POST stage clip prompt + image in project workspace
+  - `/api/ai/combine-and-send` — POST combine clips and stage for IDE
   - `/api/ai/status` — GET AI module status
   - `/api/workflow/status` — GET workflow engine status
   - `/api/workflow/changelog` — GET workflow changelog
@@ -159,11 +168,14 @@ REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatic
 
 ### MCP Server (`mcp-server/`)
 
-Separate Node.js process (stdio transport) that bridges AI IDE agents to Sciurus via the HTTP API. Has its own `package.json` with `@modelcontextprotocol/sdk` dependency.
+Separate Node.js process (stdio transport) that bridges AI IDE agents to HuminLoop via the HTTP API. Has its own `package.json` with `@modelcontextprotocol/sdk` dependency.
 
-**Tools (16 total):**
-- **Knowledge:** `clip_list`, `clip_get`, `clip_create`, `clip_update`, `clip_delete`, `clip_complete`, `clip_search`, `clip_summarize`, `project_list`, `project_get`, `project_create`, `category_list`, `sciurus_health` — proxy to HTTP API
+**Tools (19 total):**
+- **Knowledge:** `clip_list`, `clip_get`, `clip_create`, `clip_update`, `clip_delete`, `clip_complete`, `clip_search`, `clip_summarize`, `project_list`, `project_get`, `project_create`, `category_list`, `huminloop_health` — proxy to HTTP API
 - **Workflow:** `session_context`, `session_read`, `git_status` — run locally via `child_process`
+- **IDE Bridge:** `project_match` (auto-match workspace to HuminLoop project + return workflow context), `get_pending_prompt` (read staged IDE_PROMPT.md + image, one-shot delivery), `clip_get_prompt` (fetch clip prompt + optional image on-demand)
+
+**Project matching:** `matchProject()` compares `PROJECT_ROOT` against project `repo_path` fields (normalized path comparison, cached for session lifetime).
 
 **Container-aware:** auto-detects devcontainers/Codespaces and uses `host.docker.internal` to reach the Electron app on the host.
 
@@ -172,7 +184,7 @@ Separate Node.js process (stdio transport) that bridges AI IDE agents to Sciurus
 `db.js` is a backend switcher that delegates to `db-pg.js` (PostgreSQL) or `db-sqlite.js` (better-sqlite3). Auto-detects PostgreSQL availability, falls back to SQLite. Both implementations expose the same API surface.
 
 - **PostgreSQL:** Docker container, port 5433, schema in `docker/init.sql`
-- **SQLite:** `{userData}/sciurus.db`, WAL mode
+- **SQLite:** `{userData}/huminloop.db`, WAL mode
 - **Images:** Stored on disk at `{userData}/images/{clipId}.png`, DB stores `__on_disk__` flag
 - **DB_BACKEND** env var: `pg`, `sqlite`, or `auto` (default — tries pg first, falls back to sqlite)
 
@@ -228,7 +240,7 @@ In-memory array (max 200 entries) persisted to DB settings key `audit_log`. Trac
 
 ## Workflow System
 
-Two-layer structure: `workflow/` (generic templates + Linux scripts from ai-dev-workflow repo) and `.ai-workflow/` (Sciurus-compiled instructions + Windows-adapted scripts).
+Two-layer structure: `workflow/` (generic templates + Linux scripts from ai-dev-workflow repo) and `.ai-workflow/` (HuminLoop-compiled instructions + Windows-adapted scripts).
 
 ### Runtime: `.ai-workflow/`
 

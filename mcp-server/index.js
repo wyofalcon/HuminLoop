@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Sciurus MCP Server — Protocol bridge between AI IDE agents and the Sciurus Electron app.
+ * HuminLoop MCP Server — Protocol bridge between AI IDE agents and the HuminLoop Electron app.
  *
  * Architecture:
- *   Claude Code (stdio) ←→ this process ←→ Sciurus Electron app (HTTP on localhost)
+ *   Claude Code (stdio) ←→ this process ←→ HuminLoop Electron app (HTTP on localhost)
  *
- * Knowledge tools call the Sciurus HTTP API.
+ * Knowledge tools call the HuminLoop HTTP API.
  * Workflow tools (session, git) run locally via child_process.
  */
 
@@ -18,13 +18,13 @@ const path = require('path');
 
 // ── Config ──
 
-const API_PORT = process.env.SCIURUS_API_PORT || '7277';
+const API_PORT = process.env.HUMINLOOP_API_PORT || '7277';
 const IS_CONTAINER = process.env.REMOTE_CONTAINERS === 'true'
   || process.env.CODESPACES === 'true'
   || require('fs').existsSync('/.dockerenv');
-const API_HOST = process.env.SCIURUS_API_HOST || (IS_CONTAINER ? 'host.docker.internal' : '127.0.0.1');
+const API_HOST = process.env.HUMINLOOP_API_HOST || (IS_CONTAINER ? 'host.docker.internal' : '127.0.0.1');
 const API_BASE = `http://${API_HOST}:${API_PORT}`;
-const PROJECT_ROOT = process.env.SCIURUS_PROJECT_ROOT
+const PROJECT_ROOT = process.env.HUMINLOOP_PROJECT_ROOT
   || (() => { try { return execSync('git rev-parse --show-toplevel', { encoding: 'utf-8' }).trim(); } catch { return process.cwd(); } })();
 
 // ── HTTP helpers ──
@@ -38,7 +38,7 @@ async function api(method, path, body) {
   try {
     resp = await fetch(url, opts);
   } catch (e) {
-    throw new Error(`Sciurus app not reachable at ${API_BASE} — is it running? (${e.message})`);
+    throw new Error(`HuminLoop app not reachable at ${API_BASE} — is it running? (${e.message})`);
   }
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
@@ -55,13 +55,29 @@ function errorResult(msg) {
   return { content: [{ type: 'text', text: `Error: ${msg}` }], isError: true };
 }
 
+function imageContent(base64, mimeType = 'image/png') {
+  return { type: 'image', data: base64, mimeType };
+}
+
+// ── Project Matching ──
+
+let _cachedProject = undefined;
+async function matchProject() {
+  if (_cachedProject !== undefined) return _cachedProject;
+  const projects = await api('GET', '/api/projects');
+  const norm = p => p.replace(/\\/g, '/').replace(/\/[^/]+\.code-workspace$/i, '').replace(/\/+$/, '').toLowerCase();
+  const match = projects.find(p => p.repo_path && norm(p.repo_path) === norm(PROJECT_ROOT));
+  _cachedProject = match || null;
+  return _cachedProject;
+}
+
 // ── Tool Definitions ──
 
 const TOOLS = [
   // Knowledge Capture
   {
     name: 'clip_list',
-    description: 'List clips from Sciurus. Filter by project_id or get unassigned clips.',
+    description: 'List clips from HuminLoop. Filter by project_id or get unassigned clips.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -72,7 +88,7 @@ const TOOLS = [
   },
   {
     name: 'clip_get',
-    description: 'Get a single Sciurus clip by ID.',
+    description: 'Get a single HuminLoop clip by ID.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', description: 'Clip ID' } },
@@ -81,7 +97,7 @@ const TOOLS = [
   },
   {
     name: 'clip_create',
-    description: 'Create a new Sciurus clip (screenshot note). Provide at least a comment or image.',
+    description: 'Create a new HuminLoop clip (screenshot note). Provide at least a comment or image.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -98,7 +114,7 @@ const TOOLS = [
   },
   {
     name: 'clip_update',
-    description: 'Update fields on a Sciurus clip.',
+    description: 'Update fields on a HuminLoop clip.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -114,7 +130,7 @@ const TOOLS = [
   },
   {
     name: 'clip_delete',
-    description: 'Soft-delete a Sciurus clip (moves to trash).',
+    description: 'Soft-delete a HuminLoop clip (moves to trash).',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
@@ -123,7 +139,7 @@ const TOOLS = [
   },
   {
     name: 'clip_complete',
-    description: 'Mark a Sciurus clip as completed. Optionally archive (trash) it.',
+    description: 'Mark a HuminLoop clip as completed. Optionally archive (trash) it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -135,7 +151,7 @@ const TOOLS = [
   },
   {
     name: 'clip_search',
-    description: 'AI-powered semantic search across all Sciurus clips.',
+    description: 'AI-powered semantic search across all HuminLoop clips.',
     inputSchema: {
       type: 'object',
       properties: { query: { type: 'string', description: 'Natural language search query' } },
@@ -144,7 +160,7 @@ const TOOLS = [
   },
   {
     name: 'clip_summarize',
-    description: 'Generate AI fix prompts for all notes in a Sciurus project.',
+    description: 'Generate AI fix prompts for all notes in a HuminLoop project.',
     inputSchema: {
       type: 'object',
       properties: { project_id: { type: 'number', description: 'Project ID to summarize' } },
@@ -152,13 +168,22 @@ const TOOLS = [
     },
   },
   {
+    name: 'clip_combine_prompt',
+    description: 'Combine multiple HuminLoop clips into a single unified AI prompt.',
+    inputSchema: {
+      type: 'object',
+      properties: { clip_ids: { type: 'array', items: { type: 'number' }, description: 'Array of clip IDs to combine' } },
+      required: ['clip_ids'],
+    },
+  },
+  {
     name: 'project_list',
-    description: 'List all Sciurus projects with clip counts.',
+    description: 'List all HuminLoop projects with clip counts.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'project_get',
-    description: 'Get a Sciurus project by ID.',
+    description: 'Get a HuminLoop project by ID.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number' } },
@@ -167,7 +192,7 @@ const TOOLS = [
   },
   {
     name: 'project_create',
-    description: 'Create a new Sciurus project.',
+    description: 'Create a new HuminLoop project.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -181,16 +206,16 @@ const TOOLS = [
   },
   {
     name: 'category_list',
-    description: 'List all Sciurus categories.',
+    description: 'List all HuminLoop categories.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
-    name: 'sciurus_health',
-    description: 'Check if the Sciurus Electron app is running and get its status.',
+    name: 'huminloop_health',
+    description: 'Check if the HuminLoop Electron app is running and get its status.',
     inputSchema: { type: 'object', properties: {} },
   },
 
-  // Workflow — runs locally, no Sciurus HTTP call
+  // Workflow — runs locally, no HuminLoop HTTP call
   {
     name: 'session_context',
     description: 'Gather current git state and project context for the working directory.',
@@ -206,12 +231,35 @@ const TOOLS = [
     description: 'Get comprehensive git status with branch, staged/unstaged changes, and ahead/behind counts.',
     inputSchema: { type: 'object', properties: {} },
   },
+
+  // Project-Workspace Bridge
+  {
+    name: 'project_match',
+    description: 'Auto-match the current workspace to a HuminLoop project by repo_path. Returns project info plus workflow context (SESSION.md, AUDIT_LOG.md).',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_pending_prompt',
+    description: 'Read a pending IDE prompt staged by HuminLoop. Returns prompt text and optional screenshot image. Files are cleared after reading (one-shot delivery).',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'clip_get_prompt',
+    description: 'Get the AI fix prompt (and optional screenshot) for a specific clip, or the latest clip with a prompt for the matched project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        clip_id: { type: 'string', description: 'Specific clip ID. If omitted, gets the latest clip with a prompt for the matched project.' },
+        include_image: { type: 'boolean', description: 'Include the clip screenshot as an image (default: false)' },
+      },
+    },
+  },
 ];
 
 // ── Tool Handlers ──
 
 const HANDLERS = {
-  // ── Knowledge tools → Sciurus HTTP API ──
+  // ── Knowledge tools → HuminLoop HTTP API ──
 
   async clip_list(args) {
     const params = new URLSearchParams();
@@ -261,6 +309,10 @@ const HANDLERS = {
     return textResult(await api('POST', '/api/ai/summarize', { project_id: args.project_id }));
   },
 
+  async clip_combine_prompt(args) {
+    return textResult(await api('POST', '/api/ai/combine', { clipIds: args.clip_ids }));
+  },
+
   async project_list() {
     return textResult(await api('GET', '/api/projects'));
   },
@@ -277,7 +329,7 @@ const HANDLERS = {
     return textResult(await api('GET', '/api/categories'));
   },
 
-  async sciurus_health() {
+  async huminloop_health() {
     return textResult(await api('GET', '/api/health'));
   },
 
@@ -319,6 +371,78 @@ const HANDLERS = {
     }
   },
 
+  // ── Project-Workspace Bridge tools ──
+
+  async project_match() {
+    const project = await matchProject();
+    if (!project) return textResult({ matched: false, project_root: PROJECT_ROOT, message: 'No HuminLoop project matches this workspace. Create one with a repo_path matching: ' + PROJECT_ROOT });
+
+    // Read local workflow context files
+    const ctxDir = path.join(PROJECT_ROOT, '.ai-workflow', 'context');
+    let session = null, auditLog = null;
+    try { session = fs.readFileSync(path.join(ctxDir, 'SESSION.md'), 'utf-8').trim(); } catch {}
+    try { auditLog = fs.readFileSync(path.join(ctxDir, 'AUDIT_LOG.md'), 'utf-8').trim(); } catch {}
+
+    return textResult({ matched: true, project, session, auditLog });
+  },
+
+  async get_pending_prompt() {
+    const ctxDir = path.join(PROJECT_ROOT, '.ai-workflow', 'context');
+    const promptPath = path.join(ctxDir, 'IDE_PROMPT.md');
+    const imagePath = path.join(ctxDir, 'ide-prompt-image.png');
+
+    let promptText;
+    try {
+      promptText = fs.readFileSync(promptPath, 'utf-8');
+    } catch {
+      return textResult('No pending IDE prompt found. Use HuminLoop to send a prompt to IDE first.');
+    }
+
+    const content = [{ type: 'text', text: promptText }];
+
+    // Include image if it exists
+    try {
+      const imgBuf = fs.readFileSync(imagePath);
+      content.push(imageContent(imgBuf.toString('base64'), 'image/png'));
+    } catch {}
+
+    // Clean up (one-shot delivery)
+    try { fs.unlinkSync(promptPath); } catch {}
+    try { fs.unlinkSync(imagePath); } catch {}
+
+    return { content };
+  },
+
+  async clip_get_prompt(args) {
+    let clip;
+    if (args.clip_id) {
+      clip = await api('GET', `/api/clips/${encodeURIComponent(args.clip_id)}`);
+    } else {
+      // Find latest clip with a prompt for the matched project
+      const project = await matchProject();
+      if (!project) return errorResult('No HuminLoop project matches this workspace. Provide a clip_id or set up a project with repo_path.');
+      const clips = await api('GET', `/api/clips?project_id=${project.id}`);
+      clip = [...clips].reverse().find(c => c.aiFixPrompt);
+      if (!clip) return textResult('No clips with AI prompts found for project: ' + project.name);
+    }
+
+    if (!clip.aiFixPrompt) return textResult('This clip has no AI fix prompt yet.');
+
+    const content = [{ type: 'text', text: clip.aiFixPrompt }];
+
+    if (args.include_image) {
+      try {
+        const imgData = await api('GET', `/api/clips/${encodeURIComponent(clip.id)}/image`);
+        if (imgData.image) {
+          const base64 = imgData.image.replace(/^data:image\/\w+;base64,/, '');
+          content.push(imageContent(base64, 'image/png'));
+        }
+      } catch {}
+    }
+
+    return { content };
+  },
+
   async git_status() {
     const git = (cmd) => { try { return execSync(cmd, { cwd: PROJECT_ROOT, encoding: 'utf-8' }).trim(); } catch { return ''; } };
 
@@ -357,7 +481,7 @@ const HANDLERS = {
 
 async function main() {
   const server = new Server(
-    { name: 'sciurus', version: '1.0.0' },
+    { name: 'huminloop', version: '1.0.0' },
     { capabilities: { tools: {} } }
   );
 
@@ -379,6 +503,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error('Sciurus MCP server failed to start:', e.message);
+  console.error('HuminLoop MCP server failed to start:', e.message);
   process.exit(1);
 });

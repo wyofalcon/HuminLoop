@@ -1,5 +1,5 @@
 /**
- * Sciurus — SQLite data access layer
+ * HuminLoop — SQLite data access layer
  * Zero-setup alternative to PostgreSQL for distribution to end users.
  * Uses better-sqlite3 (synchronous, bundled SQLite, no external deps).
  */
@@ -53,6 +53,7 @@ const SCHEMA = `
     completed_at  TEXT DEFAULT NULL,
     archived      INTEGER NOT NULL DEFAULT 0,
     ai_fix_prompt TEXT DEFAULT NULL,
+    sent_to_ide_at TEXT DEFAULT NULL,
     deleted_at    TEXT DEFAULT NULL,
     timestamp     INTEGER NOT NULL,
     window_title  TEXT DEFAULT NULL,
@@ -135,10 +136,10 @@ async function init(dbPath) {
     runSqliteMigrations();
 
     await refreshCategoryCache();
-    console.log(`[Sciurus DB] SQLite ready: ${dbPath}`);
+    console.log(`[HuminLoop DB] SQLite ready: ${dbPath}`);
     return true;
   } catch (e) {
-    console.error('[Sciurus DB] SQLite init failed:', e.message);
+    console.error('[HuminLoop DB] SQLite init failed:', e.message);
     return false;
   }
 }
@@ -154,6 +155,8 @@ function runSqliteMigrations() {
     `ALTER TABLE clips ADD COLUMN summarize_count INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE clips ADD COLUMN source TEXT NOT NULL DEFAULT 'full'`,
     `ALTER TABLE projects ADD COLUMN active_in_ide INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE projects ADD COLUMN ide TEXT DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN sent_to_ide_at TEXT DEFAULT NULL`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column/index already exists */ }
@@ -229,6 +232,7 @@ const CLIPS_BASE_QUERY = `
          c.project_id, p.name AS "projectName",
          c.tags, c.ai_summary AS "aiSummary",
          c.ai_fix_prompt AS "aiFixPrompt",
+         c.sent_to_ide_at AS "sentToIdeAt",
          c.url, c.status, c.timestamp,
          c.completed_at AS "completedAt",
          c.archived,
@@ -313,7 +317,7 @@ async function saveClip(clip) {
 }
 
 async function updateClip(id, updates) {
-  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived', 'summarize_count'];
+  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived', 'summarize_count', 'sent_to_ide_at'];
   const setClauses = [];
   const params = [];
 
@@ -361,6 +365,9 @@ async function updateClip(id, updates) {
     } else if (key === 'summarize_count') {
       setClauses.push('summarize_count = ?');
       params.push(val);
+    } else if (key === 'sent_to_ide_at') {
+      setClauses.push('sent_to_ide_at = ?');
+      params.push(val);
     }
   }
 
@@ -402,7 +409,7 @@ async function migrateArchivedToTrash() {
   const result = db.prepare(
     `UPDATE clips SET deleted_at = datetime('now'), archived = 0 WHERE archived = 1 AND deleted_at IS NULL`
   ).run();
-  if (result.changes > 0) console.log(`[Sciurus DB] Migrated ${result.changes} archived clip(s) to trash`);
+  if (result.changes > 0) console.log(`[HuminLoop DB] Migrated ${result.changes} archived clip(s) to trash`);
   return result.changes;
 }
 
@@ -438,8 +445,8 @@ async function getProject(id) {
 
 async function createProject(data) {
   return db.prepare(
-    `INSERT INTO projects (name, description, repo_path, color) VALUES (?, ?, ?, ?) RETURNING *`
-  ).get(data.name, data.description || '', data.repo_path || null, data.color || '#3b82f6');
+    `INSERT INTO projects (name, description, repo_path, color, ide) VALUES (?, ?, ?, ?, ?) RETURNING *`
+  ).get(data.name, data.description || '', data.repo_path || null, data.color || '#3b82f6', data.ide || null);
 }
 
 async function updateProject(id, data) {
@@ -451,6 +458,7 @@ async function updateProject(id, data) {
   if (data.repo_path !== undefined) { fields.push('repo_path = ?'); params.push(data.repo_path); }
   if (data.color !== undefined) { fields.push('color = ?'); params.push(data.color); }
   if (data.active_in_ide !== undefined) { fields.push('active_in_ide = ?'); params.push(data.active_in_ide ? 1 : 0); }
+  if (data.ide !== undefined) { fields.push('ide = ?'); params.push(data.ide); }
 
   if (fields.length === 0) return null;
 
@@ -552,10 +560,10 @@ async function migrateFromStore(storeData) {
 
     migrate();
     await refreshCategoryCache();
-    console.log(`[Sciurus DB] Migrated ${clips.length} clips and ${categories.length} categories`);
+    console.log(`[HuminLoop DB] Migrated ${clips.length} clips and ${categories.length} categories`);
     return true;
   } catch (err) {
-    console.error('[Sciurus DB] Migration failed:', err.message);
+    console.error('[HuminLoop DB] Migration failed:', err.message);
     return false;
   }
 }

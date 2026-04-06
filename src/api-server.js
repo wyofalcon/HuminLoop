@@ -1,6 +1,6 @@
 /**
- * Sciurus — Local HTTP API Server
- * Mirrors IPC handlers so external tools (MCP servers, CLIs) can access Sciurus.
+ * HuminLoop — Local HTTP API Server
+ * Mirrors IPC handlers so external tools (MCP servers, CLIs) can access HuminLoop.
  * Binds to 127.0.0.1 only — localhost access only, no auth needed.
  *
  * Usage: called from main.js after DB and AI are initialized.
@@ -13,7 +13,15 @@ const path = require('path');
 const fs = require('fs');
 const { URL } = require('url');
 
-const PORT = parseInt(process.env.SCIURUS_API_PORT || '7277', 10);
+// Normalize repo_path: strip quotes from "Copy as Path", strip .code-workspace filename
+function normalizeRepoPath(p) {
+  if (!p) return p;
+  p = p.replace(/^["']|["']$/g, '').trim();
+  p = p.replace(/[\\/][^\\/]+\.code-workspace$/i, '');
+  return p;
+}
+
+const PORT = parseInt(process.env.HUMINLOOP_API_PORT || '7277', 10);
 
 // ── Route Matching ──
 
@@ -129,7 +137,7 @@ function startApiServer(deps) {
         // Background AI categorization
         if ((clip.comment || imageData) && ai.isEnabled()) {
           autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
-            .catch(e => console.error('[Sciurus API] Auto-categorize error:', e.message));
+            .catch(e => console.error('[HuminLoop API] Auto-categorize error:', e.message));
         }
         return json(res, { success: true, id: clip.id }, 201);
       }
@@ -159,6 +167,43 @@ function startApiServer(deps) {
       if (method === 'POST' && (m = matchRoute('/api/clips/:id/restore', pathname))) {
         await db.restoreClip(m.params.id);
         return json(res, { success: true });
+      }
+
+      // GET /api/clips/:id/image — serve clip screenshot as data URL
+      if (method === 'GET' && (m = matchRoute('/api/clips/:id/image', pathname))) {
+        const dataUrl = images.loadImage(m.params.id);
+        if (!dataUrl) return error(res, 'Image not found', 404);
+        return json(res, { image: dataUrl });
+      }
+
+      // POST /api/clips/:id/send-to-ide — stage prompt + image in project workspace
+      if (method === 'POST' && (m = matchRoute('/api/clips/:id/send-to-ide', pathname))) {
+        const clip = await db.getClip(m.params.id);
+        if (!clip) return error(res, 'Clip not found', 404);
+        if (!clip.aiFixPrompt) return error(res, 'Clip has no AI prompt yet');
+        if (!clip.project_id) return error(res, 'Clip not assigned to a project');
+        const project = await db.getProject(clip.project_id);
+        if (!project || !project.repo_path) return error(res, 'Project has no repo_path');
+
+        const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+        if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+
+        // Write prompt
+        fs.writeFileSync(path.join(contextDir, 'IDE_PROMPT.md'), clip.aiFixPrompt, 'utf8');
+
+        // Write image if available
+        const body = await parseBody(req);
+        if (body.include_image !== false) {
+          const dataUrl = images.loadImage(m.params.id);
+          if (dataUrl) {
+            const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+            fs.writeFileSync(path.join(contextDir, 'ide-prompt-image.png'), Buffer.from(base64, 'base64'));
+          }
+        }
+
+        await db.updateClip(m.params.id, { sent_to_ide_at: new Date().toISOString() });
+        addAuditEntry('send-to-ide', `Clip ${m.params.id} prompt staged for IDE at ${project.repo_path}`);
+        return json(res, { success: true, path: project.repo_path });
       }
 
       // DELETE /api/clips/:id/permanent
@@ -199,6 +244,7 @@ function startApiServer(deps) {
 
       if (method === 'POST' && pathname === '/api/projects') {
         const data = await parseBody(req);
+        if (data.repo_path) data.repo_path = normalizeRepoPath(data.repo_path);
         const project = await db.createProject(data);
         rules.invalidateCache();
         return json(res, project, 201);
@@ -212,6 +258,7 @@ function startApiServer(deps) {
 
       if (method === 'PATCH' && (m = matchRoute('/api/projects/:id', pathname))) {
         const data = await parseBody(req);
+        if (data.repo_path) data.repo_path = normalizeRepoPath(data.repo_path);
         const project = await db.updateProject(parseInt(m.params.id, 10), data);
         rules.invalidateCache();
         return json(res, project);
@@ -290,6 +337,54 @@ function startApiServer(deps) {
         })));
       }
 
+      if (method === 'POST' && pathname === '/api/ai/combine') {
+        const { clipIds } = await parseBody(req);
+        if (!Array.isArray(clipIds) || clipIds.length === 0) return error(res, 'clipIds array required');
+
+        const allClips = await db.getClips();
+        const selected = allClips.filter(c => clipIds.includes(c.id));
+        if (selected.length === 0) return error(res, 'No matching clips found');
+
+        const notes = selected.map(c => {
+          const raw = images.loadImage(c.id);
+          return { id: c.id, comment: c.comment || '', imageDataURL: raw ? images.compressForAI(raw) : null };
+        });
+
+        const prompt = await ai.generateCombinedPrompt(notes);
+        return json(res, { prompt });
+      }
+
+      if (method === 'POST' && pathname === '/api/ai/combine-and-send') {
+        const { clipIds, project_id } = await parseBody(req);
+        if (!Array.isArray(clipIds) || clipIds.length === 0) return error(res, 'clipIds array required');
+        if (!project_id) return error(res, 'project_id required');
+        const project = await db.getProject(parseInt(project_id, 10));
+        if (!project || !project.repo_path) return error(res, 'Project has no repo_path');
+
+        const allClips = await db.getClips();
+        const selected = allClips.filter(c => clipIds.includes(c.id));
+        if (selected.length === 0) return error(res, 'No matching clips found');
+
+        const notes = selected.map(c => {
+          const raw = images.loadImage(c.id);
+          return { id: c.id, comment: c.comment || '', imageDataURL: raw ? images.compressForAI(raw) : null };
+        });
+
+        const prompt = await ai.generateCombinedPrompt(notes);
+        if (!prompt) return error(res, 'AI prompt generation failed');
+
+        const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+        if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+        fs.writeFileSync(path.join(contextDir, 'IDE_PROMPT.md'), prompt, 'utf8');
+
+        const sentAt = new Date().toISOString();
+        for (const c of selected) {
+          await db.updateClip(c.id, { sent_to_ide_at: sentAt });
+        }
+        addAuditEntry('send-to-ide', `Combined ${selected.length} clips staged for IDE at ${project.repo_path}`);
+        return json(res, { success: true, prompt, path: project.repo_path });
+      }
+
       // ── Workflow ──
 
       if (method === 'GET' && pathname === '/api/workflow/status') {
@@ -332,20 +427,20 @@ function startApiServer(deps) {
       error(res, `Not found: ${method} ${pathname}`, 404);
 
     } catch (e) {
-      console.error(`[Sciurus API] ${method} ${pathname} error:`, e.message);
+      console.error(`[HuminLoop API] ${method} ${pathname} error:`, e.message);
       error(res, e.message, 500);
     }
   });
 
   server.listen(PORT, '127.0.0.1', () => {
-    console.log(`[Sciurus API] Listening on http://127.0.0.1:${PORT}`);
+    console.log(`[HuminLoop API] Listening on http://127.0.0.1:${PORT}`);
   });
 
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
-      console.warn(`[Sciurus API] Port ${PORT} already in use — API server disabled`);
+      console.warn(`[HuminLoop API] Port ${PORT} already in use — API server disabled`);
     } else {
-      console.error('[Sciurus API] Server error:', e.message);
+      console.error('[HuminLoop API] Server error:', e.message);
     }
   });
 

@@ -37,7 +37,7 @@ LAST_COMMIT=$(git -C "$PROJECT_ROOT" log --oneline -1 2>/dev/null || echo "no co
 DIRTY=$(git -C "$PROJECT_ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 AHEAD=$(git -C "$PROJECT_ROOT" rev-list @{u}..HEAD --count 2>/dev/null || echo "0")
 
-# Sciurus API
+# HuminLoop API
 API_STATUS="${RED}DOWN${NC}"
 if curl -s http://127.0.0.1:7277/api/health >/dev/null 2>&1; then
   API_STATUS="${GREEN}UP${NC}"
@@ -50,7 +50,7 @@ case "${1:-full}" in
     ;;
   *)
     echo -e "${CYAN}================================================================${NC}"
-    echo -e "  ${DIM}SCIURUS AI DEV WORKFLOW${NC}"
+    echo -e "  ${DIM}HUMINLOOP AI DEV WORKFLOW${NC}"
     echo -e "${CYAN}================================================================${NC}"
     echo -e "  Branch:         ${GREEN}$BRANCH${NC}"
     echo -e "  Last commit:    ${DIM}$LAST_COMMIT${NC}"
@@ -59,7 +59,7 @@ case "${1:-full}" in
     echo -e "${CYAN}----------------------------------------------------------------${NC}"
     echo -e "  Prompt Relay:   $RELAY_DISPLAY"
     echo -e "  Audit Watch:    $AUDIT_DISPLAY"
-    echo -e "  Sciurus API:    $API_STATUS"
+    echo -e "  HuminLoop API:    $API_STATUS"
     echo -e "${CYAN}----------------------------------------------------------------${NC}"
 
     # Prompt tracker

@@ -98,7 +98,7 @@ const PROMPT_BLOCKS = [
 ];
 
 // These are always included regardless of toggles
-const CORE_INTRO = `You are the AI backend for Sciurus, an ADHD-friendly knowledge-capture tool.
+const CORE_INTRO = `You are the AI backend for HuminLoop, an ADHD-friendly knowledge-capture tool.
 The user just captured a screenshot of something on their screen and wrote a quick note about it.
 They're moving fast — your job is to do the organizing they don't have time for. Analyze EVERYTHING
 available — the screenshot, the note, and any visible UI elements, URLs, text, or context in the
@@ -131,7 +131,7 @@ Generate a single, specific, actionable prompt that a coding AI could execute di
 let enabledBlocks = null; // { category: true, project: true, ... }
 let customBlocks = []; // user-added custom instruction blocks
 
-const SEARCH_SYSTEM = `You are the search backend for Sciurus, a knowledge-capture tool.
+const SEARCH_SYSTEM = `You are the search backend for HuminLoop, a knowledge-capture tool.
 The user is searching their saved clips using natural language. They may use vague phrasing,
 nicknames, or partial recall (e.g. "that paste thing for Marcus", "gpu driver fix from last week").
 
@@ -308,7 +308,7 @@ async function generateLitePrompt(comment, imageDataURL, windowMeta = {}, projec
     if (!result) return null;
     return result.replace(/^["'`]+|["'`]+$/g, '').trim();
   } catch (e) {
-    console.error('[Sciurus AI] Lite prompt generation failed:', e.message);
+    console.error('[HuminLoop AI] Lite prompt generation failed:', e.message);
     return null;
   }
 }
@@ -452,7 +452,7 @@ function estimateTokens(text) {
 }
 
 function getSummarizePrompt() {
-  const base = `You are the summarization backend for Sciurus, a knowledge-capture tool.
+  const base = `You are the summarization backend for HuminLoop, a knowledge-capture tool.
 You receive a note from a project, optionally with a screenshot. Generate an actionable AI prompt
 that another AI (like Copilot or ChatGPT) could use to fix, implement, or resolve the issue.
 The prompt should:
@@ -499,7 +499,36 @@ async function summarizeNotes(notes) {
   return results;
 }
 
+const COMBINE_PROMPT = `You receive multiple related notes from a developer's project, each with an optional screenshot.
+Synthesize ALL of them into ONE unified, actionable prompt that another AI coding tool can execute.
+The combined prompt should:
+- Merge related context from all notes into a coherent task description
+- State the problem or task in imperative form (e.g. "Fix the…", "Implement…", "Refactor…")
+- Include all relevant technical context: file names, function names, error messages, tools, libraries
+- If screenshots are provided, analyze them for code, errors, UI issues, file paths — reference specifics
+- Eliminate redundancy — don't repeat the same information from different notes
+- Preserve nuances — if notes describe different aspects of the same issue, cover all angles
+- Keep it focused and structured — use numbered steps if the task has multiple parts
+Return ONLY the prompt text. No JSON, no markdown fences, no preamble.`;
+
+async function generateCombinedPrompt(notes) {
+  if (!isEnabled() || !notes.length) return '';
+
+  const parts = [];
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    if (n.imageDataURL) {
+      const base64 = n.imageDataURL.replace(/^data:image\/[^;]+;base64,/, '');
+      parts.push({ inline_data: { mime_type: 'image/png', data: base64 } });
+    }
+    parts.push({ text: `--- Note ${i + 1} (ID: ${n.id}) ---\n${n.comment || '(no text)'}` });
+  }
+
+  const result = await callGemini(COMBINE_PROMPT, parts, { raw: true });
+  return typeof result === 'string' ? result.replace(/^["']|["']$/g, '') : '';
+}
+
 module.exports = {
-  init, isEnabled, categorize, generateLitePrompt, search, summarizeNotes,
+  init, isEnabled, categorize, generateLitePrompt, search, summarizeNotes, generateCombinedPrompt,
   getCategorizePrompt, getPromptBlocks, setPromptBlocks, resetPromptBlocks, estimateTokens,
 };

@@ -1,4 +1,4 @@
--- Sciurus Database Schema
+-- HuminLoop Database Schema
 
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -61,6 +61,7 @@ CREATE TABLE clips (
     completed_at TIMESTAMPTZ DEFAULT NULL,
     archived    BOOLEAN NOT NULL DEFAULT FALSE,
     ai_fix_prompt TEXT DEFAULT NULL,
+    sent_to_ide_at TIMESTAMPTZ DEFAULT NULL,
     deleted_at  TIMESTAMPTZ DEFAULT NULL,
     timestamp   BIGINT NOT NULL,
     source      VARCHAR(10) NOT NULL DEFAULT 'full' CHECK (source IN ('full', 'lite')),

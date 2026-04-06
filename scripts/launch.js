@@ -4,9 +4,9 @@
 
 delete process.env.ELECTRON_RUN_AS_NODE;
 
-// --dev flag sets SCIURUS_DEV for dev mode
+// --dev flag sets HUMINLOOP_DEV for dev mode
 if (process.argv.includes('--dev')) {
-  process.env.SCIURUS_DEV = '1';
+  process.env.HUMINLOOP_DEV = '1';
 }
 
 const { spawn } = require('child_process');

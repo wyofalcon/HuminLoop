@@ -25,6 +25,9 @@ let collapsedGroups = new Set();
 // Projects tab state
 let selectedProjectId = null;
 let hideCompleted = false;
+let promptFilter = 'all'; // 'all' | 'with-prompt' | 'no-prompt'
+let selectMode = false;
+let selectedClipIds = new Set();
 
 // Workflow tab state
 let workflowStatus = null;
@@ -111,6 +114,21 @@ function scheduleReload() {
 
 window.quickclip.onClipsChanged(() => scheduleReload());
 window.quickclip.onProjectsChanged(() => scheduleReload());
+window.quickclip.onPromptAutoCopied(() => showToast('Prompt copied to clipboard'));
+
+// ── Toast ──
+
+function showToast(msg) {
+  let toast = document.getElementById('huminloop-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'huminloop-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2500);
+}
 
 // ── Escaping ──
 
@@ -191,7 +209,7 @@ function updateStatusBar() {
   } else if (showTrash) {
     sub.textContent = `${trashClips.length} trashed note${trashClips.length !== 1 ? 's' : ''}`;
   } else if (activeTab === 'help') {
-    sub.textContent = 'Help — how to use Sciurus';
+    sub.textContent = 'Help — how to use HuminLoop';
   } else if (activeTab === 'workflow') {
     const mode = workflowStatus?.relayMode || '?';
     sub.textContent = `AI Dev Workflow · relay: ${mode}`;
@@ -339,7 +357,7 @@ function renderHelpContent(el) {
   if (isLiteMode) {
     el.innerHTML = `
       <div class="help-page">
-        <h2>Help — Sciurus! Lite Mode v${esc(ver.version)}</h2>
+        <h2>Help — HuminLoop Lite Mode v${esc(ver.version)}</h2>
 
         <div class="help-section" id="help-getting-started">
           <h3>Getting Started</h3>
@@ -415,7 +433,7 @@ function renderHelpContent(el) {
 
         <div class="help-section" id="help-switching">
           <h3>Switching Modes</h3>
-          <p>Right-click the Sciurus tray icon and select <strong>Switch to Full Mode</strong> to access all features
+          <p>Right-click the HuminLoop tray icon and select <strong>Switch to Full Mode</strong> to access all features
           (General Notes, Workflow tab, categories, window rules, and more).</p>
         </div>
       </div>
@@ -424,11 +442,11 @@ function renderHelpContent(el) {
   }
   el.innerHTML = `
     <div class="help-page">
-      <h2>Help — Sciurus! v${esc(ver.version)}</h2>
+      <h2>Help — HuminLoop v${esc(ver.version)}</h2>
 
       <div class="help-section" id="help-getting-started">
         <h3>Getting Started</h3>
-        <p>Sciurus is an AI-powered knowledge capture tool. Screenshot anything on your screen,
+        <p>HuminLoop is an AI-powered knowledge capture tool. Screenshot anything on your screen,
         add a quick note, and let AI organize it for you.</p>
         <div class="help-steps">
           <div class="help-step"><span class="help-num">1</span>Press <kbd>Ctrl+Shift+Q</kbd> or click <strong>Capture</strong></div>
@@ -441,7 +459,7 @@ function renderHelpContent(el) {
 
       <div class="help-section" id="help-capturing">
         <h3>Capturing</h3>
-        <p><strong>Automatic detection:</strong> Sciurus watches your clipboard. When you take a screenshot
+        <p><strong>Automatic detection:</strong> HuminLoop watches your clipboard. When you take a screenshot
         (Win+Shift+S, Print Screen, or any snipping tool), the capture popup opens automatically.</p>
         <p><strong>Manual capture:</strong> Click the <strong>Capture</strong> button in the header or press
         <kbd>Ctrl+Shift+Q</kbd> at any time.</p>
@@ -485,7 +503,7 @@ function renderHelpContent(el) {
 
       <div class="help-section" id="help-smart-categorization">
         <h3>Smart Categorization</h3>
-        <p>Sciurus uses a <strong>priority chain</strong> to categorize clips automatically:</p>
+        <p>HuminLoop uses a <strong>priority chain</strong> to categorize clips automatically:</p>
         <ul>
           <li><strong>1. Your selection</strong> — Manual category/project choice always wins</li>
           <li><strong>2. Window context</strong> — Active window title + process name captured before popup opens. If the title contains a project's repo folder name, auto-assigned.</li>
@@ -502,7 +520,7 @@ function renderHelpContent(el) {
 
       <div class="help-section" id="help-ai-features">
         <h3>AI Features</h3>
-        <p>Sciurus uses <strong>Gemini 2.5 Flash</strong> for vision analysis and search. AI is optional — the rule engine handles most categorization without it.</p>
+        <p>HuminLoop uses <strong>Gemini 2.5 Flash</strong> for vision analysis and search. AI is optional — the rule engine handles most categorization without it.</p>
         <ul>
           <li><strong>Auto-categorization:</strong> When rules don't match, AI reads the screenshot + note + window context and picks category, tags, summary, and URLs</li>
           <li><strong>AI Search:</strong> Type a natural language query like <em>"that paste thing for Marcus"</em> and click AI Search</li>
@@ -512,7 +530,7 @@ function renderHelpContent(el) {
 
       <div class="help-section" id="help-database">
         <h3>Database</h3>
-        <p>Sciurus supports two database backends:</p>
+        <p>HuminLoop supports two database backends:</p>
         <ul>
           <li><strong>SQLite (built-in)</strong> — Zero setup. Data stored locally. Perfect for personal use and distribution.</li>
           <li><strong>PostgreSQL (Docker)</strong> — For power users. Run <code>docker compose up -d</code> to start.</li>
@@ -1022,6 +1040,14 @@ function renderProjectDetail(el) {
     projectClips = projectClips.filter((c) => !c.completedAt);
   }
 
+  const withPromptCount = projectClips.filter((c) => c.aiFixPrompt).length;
+  const noPromptCount = projectClips.length - withPromptCount;
+  if (promptFilter === 'with-prompt') {
+    projectClips = projectClips.filter((c) => c.aiFixPrompt);
+  } else if (promptFilter === 'no-prompt') {
+    projectClips = projectClips.filter((c) => !c.aiFixPrompt);
+  }
+
   const ideActive = proj.active_in_ide || proj.activeInIde;
 
   let html = `<div class="project-detail-header">
@@ -1034,19 +1060,31 @@ function renderProjectDetail(el) {
       <button class="sb-btn-action ${ideActive ? 'ide-active' : ''}" onclick="toggleIde(${proj.id})" title="${ideActive ? 'Mark as not open in IDE' : 'Mark as open in IDE'}">
         ${ideActive ? '&#x1F7E2; In IDE' : '&#x2B55; Open in IDE'}
       </button>
+      <button class="sb-btn-action ${selectMode ? 'select-active' : ''}" onclick="toggleSelectMode()" title="${selectMode ? 'Cancel selection' : 'Select clips to combine into one prompt'}">
+        ${selectMode ? '&#x2715; Cancel' : '&#x2610; Select'}
+      </button>
       <button class="sb-btn-action summarize-btn" onclick="showProjectSummary(${proj.id})" title="Generate a side-by-side summary of all notes">&#x2728; Summarize</button>
       <button class="sb-btn-action" onclick="editProject(${proj.id})">Edit</button>
       <button class="sb-btn-action danger" onclick="confirmDeleteProject(${proj.id})">Delete</button>
     </div>
   </div>`;
 
-  if (completedCount > 0) {
-    html += `<div class="completed-toggle">
-      <label class="toggle-label" title="Show or hide completed notes">
+  if (completedCount > 0 || withPromptCount > 0) {
+    html += `<div class="project-filters">`;
+    if (completedCount > 0) {
+      html += `<label class="toggle-label" title="Show or hide completed notes">
         <input type="checkbox" ${hideCompleted ? '' : 'checked'} onchange="toggleCompleted()" />
         <span>Show completed (${completedCount})</span>
-      </label>
-    </div>`;
+      </label>`;
+    }
+    if (withPromptCount > 0 || noPromptCount > 0) {
+      html += `<div class="prompt-filter-bar">
+        <button class="prompt-filter-btn ${promptFilter === 'all' ? 'active' : ''}" onclick="setPromptFilter('all')">All</button>
+        <button class="prompt-filter-btn ${promptFilter === 'with-prompt' ? 'active' : ''}" onclick="setPromptFilter('with-prompt')">Prompts (${withPromptCount})</button>
+        <button class="prompt-filter-btn ${promptFilter === 'no-prompt' ? 'active' : ''}" onclick="setPromptFilter('no-prompt')">No Prompt (${noPromptCount})</button>
+      </div>`;
+    }
+    html += `</div>`;
   }
 
   if (proj.description) {
@@ -1054,6 +1092,9 @@ function renderProjectDetail(el) {
   }
   if (proj.repo_path) {
     html += `<div class="project-repo">${esc(proj.repo_path)}</div>`;
+  }
+  if (proj.ide) {
+    html += `<div class="project-ide-label">${esc(proj.ide)}</div>`;
   }
 
   html += `<div class="search-bar" style="margin-top:12px">
@@ -1072,6 +1113,15 @@ function renderProjectDetail(el) {
     } catch (e) {
       html += `<div class="empty"><div class="empty-title">Render error: ${e.message}</div></div>`;
     }
+  }
+
+  if (selectMode && selectedClipIds.size > 0) {
+    html += `<div class="combine-bar">
+      <span>${selectedClipIds.size} clip${selectedClipIds.size > 1 ? 's' : ''} selected</span>
+      <button class="cap-btn small" onclick="combineSelectedPrompt()">Combine Prompt</button>
+      <button class="cap-btn small send-ide" onclick="combineAndSendToIde()">Combine & Send to IDE</button>
+      <button class="cancel-btn" onclick="clearSelection()">Clear</button>
+    </div>`;
   }
 
   el.innerHTML = html;
@@ -1125,6 +1175,11 @@ function toggleCompleted() {
   renderAll();
 }
 
+function setPromptFilter(value) {
+  promptFilter = value;
+  renderAll();
+}
+
 async function toggleIde(projectId) {
   await window.quickclip.toggleProjectIde(projectId);
 }
@@ -1133,12 +1188,127 @@ function selectProject(id) {
   // In lite mode, must always have a project selected
   if (isLiteMode && id === null) return;
   selectedProjectId = id;
+  selectMode = false;
+  selectedClipIds.clear();
   // Sync active project setting in lite mode
   if (isLiteMode && id !== null) {
     window.quickclip.setLiteActiveProject(id);
   }
   renderAll();
 }
+
+// ── Clip Selection + Combine ──
+
+function toggleSelectMode() {
+  selectMode = !selectMode;
+  selectedClipIds.clear();
+  renderAll();
+}
+
+function toggleClipSelection(id) {
+  if (!selectMode) return;
+  if (selectedClipIds.has(id)) {
+    selectedClipIds.delete(id);
+  } else {
+    selectedClipIds.add(id);
+  }
+  renderAll();
+}
+
+function clearSelection() {
+  selectedClipIds.clear();
+  renderAll();
+}
+
+async function combineSelectedPrompt() {
+  if (selectedClipIds.size === 0) return;
+  const clipIds = [...selectedClipIds];
+
+  // Show loading overlay
+  const overlay = document.createElement('div');
+  overlay.id = 'combineOverlay';
+  overlay.className = 'combine-overlay';
+  overlay.innerHTML = `<div class="combine-modal">
+    <div class="combine-loading"><span class="spinner">&#x2728;</span> Combining ${clipIds.length} clips&hellip;</div>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  try {
+    const prompt = await window.quickclip.combineClipsPrompt(clipIds);
+    overlay.innerHTML = `<div class="combine-modal">
+      <div class="combine-header">
+        <h3>Combined Prompt</h3>
+        <button class="xbtn nd" onclick="document.getElementById('combineOverlay').remove()" title="Close">&#x2715;</button>
+      </div>
+      <div class="combine-result">${esc(prompt || 'No prompt generated.')}</div>
+      <div class="combine-actions">
+        <button class="cap-btn small" onclick="copyCombinedPrompt()">Copy</button>
+        ${selectedProjectId ? `<button class="cap-btn small send-ide" onclick="sendCombinedResultToIde()">Send to IDE</button>` : ''}
+        <button class="cancel-btn" onclick="document.getElementById('combineOverlay').remove()">Close</button>
+      </div>
+    </div>`;
+  } catch (e) {
+    overlay.innerHTML = `<div class="combine-modal">
+      <div class="combine-header">
+        <h3>Error</h3>
+        <button class="xbtn nd" onclick="document.getElementById('combineOverlay').remove()" title="Close">&#x2715;</button>
+      </div>
+      <div class="combine-result">${esc(e.message)}</div>
+      <div class="combine-actions">
+        <button class="cancel-btn" onclick="document.getElementById('combineOverlay').remove()">Close</button>
+      </div>
+    </div>`;
+  }
+}
+
+async function copyCombinedPrompt() {
+  const el = document.querySelector('.combine-result');
+  if (!el) return;
+  await navigator.clipboard.writeText(el.textContent);
+  showToast('Combined prompt copied to clipboard');
+}
+
+// ── Send to IDE ──
+
+async function sendClipToIde(id) {
+  try {
+    await window.quickclip.sendToIde(id);
+    showToast('Prompt sent to IDE');
+  } catch (e) {
+    showToast(e.message || 'Failed to send to IDE');
+  }
+}
+
+async function combineAndSendToIde() {
+  if (selectedClipIds.size === 0) return;
+  if (!selectedProjectId) { showToast('Select a project first'); return; }
+  const clipIds = [...selectedClipIds];
+
+  showToast('Combining and sending to IDE...');
+  try {
+    await window.quickclip.combineAndSendToIde(clipIds, selectedProjectId);
+    showToast('Combined prompt sent to IDE');
+  } catch (e) {
+    showToast(e.message || 'Failed to send to IDE');
+  }
+}
+
+async function sendCombinedResultToIde() {
+  if (selectedClipIds.size === 0 || !selectedProjectId) return;
+  const clipIds = [...selectedClipIds];
+  try {
+    await window.quickclip.combineAndSendToIde(clipIds, selectedProjectId);
+    showToast('Combined prompt sent to IDE');
+    const overlay = document.getElementById('combineOverlay');
+    if (overlay) overlay.remove();
+  } catch (e) {
+    showToast(e.message || 'Failed to send to IDE');
+  }
+}
+
+window.quickclip.onClipSentToIde(() => {
+  // Visual feedback already handled by showToast in the functions above
+});
 
 // ── Project Summary Panel ──
 
@@ -1237,7 +1407,7 @@ function copySummaryPanel() {
       btn.innerHTML = '&#x2713; Copied!';
       setTimeout(() => { btn.innerHTML = orig; }, 1500);
     }
-  });
+  }).catch(() => {});
 }
 
 // ── Project CRUD ──
@@ -1269,6 +1439,32 @@ function showNewProjectDialog() {
       <button class="color-dot" style="background:#06b6d4" onclick="pickColor(this,'#06b6d4')"></button>
       <button class="color-dot" style="background:#84cc16" onclick="pickColor(this,'#84cc16')"></button>
     </div>
+    <div class="dev-project-row">
+      <div class="dev-project-info">
+        <label class="field-label" style="margin:0">Developer Project</label>
+        <span class="field-hint">— enables IDE integration</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="projDevToggle" onchange="toggleDevProject(this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div id="ideField" class="ide-field hidden">
+      <label class="field-label">IDE</label>
+      <select id="projIde" class="field-input">
+        <option value="">Select IDE...</option>
+        <option value="VS Code">VS Code</option>
+        <option value="Cursor">Cursor</option>
+        <option value="Windsurf">Windsurf</option>
+        <option value="IntelliJ">IntelliJ</option>
+        <option value="WebStorm">WebStorm</option>
+        <option value="Neovim">Neovim</option>
+        <option value="Vim">Vim</option>
+        <option value="Emacs">Emacs</option>
+        <option value="Sublime Text">Sublime Text</option>
+        <option value="Zed">Zed</option>
+      </select>
+    </div>
     <div class="dialog-actions">
       <button class="cap-btn small" onclick="saveNewProject()">Create</button>
       <button class="cancel-btn" onclick="document.getElementById('projectDialog').remove()">Cancel</button>
@@ -1279,6 +1475,11 @@ function showNewProjectDialog() {
 }
 
 let newProjectColor = '#3b82f6';
+
+function toggleDevProject(checked, targetId) {
+  const ideField = document.getElementById(targetId || 'ideField');
+  if (ideField) ideField.classList.toggle('hidden', !checked);
+}
 
 function pickColor(btn, color) {
   newProjectColor = color;
@@ -1291,11 +1492,14 @@ async function saveNewProject() {
   if (!name) return;
   const desc = document.getElementById('projDesc').value.trim();
   const repo = document.getElementById('projRepo').value.trim();
+  const isDev = document.getElementById('projDevToggle')?.checked;
+  const ide = isDev ? (document.getElementById('projIde')?.value || null) : null;
   await window.quickclip.createProject({
     name,
     description: desc,
     repo_path: repo || null,
     color: newProjectColor,
+    ide,
   });
   projects = await window.quickclip.getProjects();
   newProjectColor = '#3b82f6';
@@ -1327,6 +1531,24 @@ function editProject(id) {
         `<button class="color-dot ${proj.color === c ? 'active' : ''}" style="background:${c}" onclick="pickEditColor(this,'${c}')"></button>`
       ).join('')}
     </div>
+    <div class="dev-project-row">
+      <div class="dev-project-info">
+        <label class="field-label" style="margin:0">Developer Project</label>
+        <span class="field-hint">— enables IDE integration</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="editProjDevToggle" ${proj.ide ? 'checked' : ''} onchange="toggleDevProject(this.checked, 'editIdeField')">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div id="editIdeField" class="ide-field ${proj.ide ? '' : 'hidden'}">
+      <label class="field-label">IDE</label>
+      <select id="editProjIde" class="field-input">
+        ${['', 'VS Code', 'Cursor', 'Windsurf', 'IntelliJ', 'WebStorm', 'Neovim', 'Vim', 'Emacs', 'Sublime Text', 'Zed'].map((v) =>
+          `<option value="${v}" ${proj.ide === v ? 'selected' : ''}>${v || 'Select IDE...'}</option>`
+        ).join('')}
+      </select>
+    </div>
     <div class="dialog-actions">
       <button class="cap-btn small" onclick="saveEditProject(${id})">Save</button>
       <button class="cancel-btn" onclick="document.getElementById('projectDialog').remove()">Cancel</button>
@@ -1349,12 +1571,15 @@ async function saveEditProject(id) {
   if (!name) return;
   const desc = document.getElementById('editProjDesc').value.trim();
   const repo = document.getElementById('editProjRepo').value.trim();
+  const isDev = document.getElementById('editProjDevToggle')?.checked;
+  const ide = isDev ? (document.getElementById('editProjIde')?.value || null) : null;
   const proj = projects.find((p) => p.id === id);
   await window.quickclip.updateProject(id, {
     name,
     description: desc,
     repo_path: repo || null,
     color: editProjectColor || (proj ? proj.color : '#3b82f6'),
+    ide,
   });
   projects = await window.quickclip.getProjects();
   editProjectColor = null;
@@ -1379,7 +1604,7 @@ async function confirmDeleteProject(id) {
 function renderSettingsContent(el) {
   const general = settings.general || { openWindowOnLaunch: true, minimizeToTray: true, theme: 'dark' };
   const capture = settings.capture || { hotkey: 'ctrl+shift+q', watchClipboard: true, pollInterval: 500, autoCategory: true };
-  const aiSettings = settings.ai || { enabled: true, autoCategorizeonSave: true, retryUncategorizedOnStartup: true };
+  const aiSettings = settings.ai || { enabled: true, autoCategorizeonSave: true, retryUncategorizedOnStartup: true, autoCopyLitePrompt: false };
 
   const ver = appVersion || { version: '?', electron: '?', node: '?' };
 
@@ -1388,7 +1613,7 @@ function renderSettingsContent(el) {
       <h2>Settings</h2>
 
       <div class="version-banner">
-        Sciurus! v${esc(ver.version)}
+        HuminLoop v${esc(ver.version)}
         <span class="version-detail">Electron ${esc(ver.electron)} · Node ${esc(ver.node)}</span>
       </div>
 
@@ -1397,7 +1622,7 @@ function renderSettingsContent(el) {
         <div class="setting-row">
           <div class="setting-info">
             <div class="setting-label">Open window on launch</div>
-            <div class="setting-desc">Show the main window when Sciurus starts</div>
+            <div class="setting-desc">Show the main window when HuminLoop starts</div>
           </div>
           <label class="toggle">
             <input type="checkbox" ${general.openWindowOnLaunch ? 'checked' : ''} onchange="updateSetting('general','openWindowOnLaunch',this.checked)">
@@ -1483,6 +1708,16 @@ function renderSettingsContent(el) {
           </div>
           <label class="toggle">
             <input type="checkbox" ${aiSettings.retryUncategorizedOnStartup ? 'checked' : ''} onchange="updateSetting('ai','retryUncategorizedOnStartup',this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Auto-copy lite prompt</div>
+            <div class="setting-desc">Copy the AI-generated prompt to clipboard automatically after lite capture</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" ${aiSettings.autoCopyLitePrompt ? 'checked' : ''} onchange="updateSetting('ai','autoCopyLitePrompt',this.checked)">
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -1709,7 +1944,11 @@ function renderClipCard(c, inProject, allKnownTags) {
   const sumCount = c.summarizeCount || 0;
   const darkenStyle = sumCount > 0 ? ` style="background: color-mix(in srgb, var(--bg-card), black ${Math.min(sumCount * 6, 30)}%)"` : '';
 
-  let html = `<div class="clip${isCompleted ? ' clip-completed' : ''}"${darkenStyle} data-testid="clip-card-${id}">`;
+  const isSelected = selectMode && inProject && selectedClipIds.has(c.id);
+  const selectClick = selectMode && inProject ? ` onclick="toggleClipSelection('${id}')"` : '';
+  const selectCursor = selectMode && inProject ? ' select-mode' : '';
+
+  let html = `<div class="clip${isCompleted ? ' clip-completed' : ''}${isSelected ? ' clip-selected' : ''}${selectCursor}"${isSelected ? '' : darkenStyle} data-testid="clip-card-${id}"${selectClick}>`;
 
   // Header row
   html += `<div class="clip-hdr">`;
@@ -1740,6 +1979,13 @@ function renderClipCard(c, inProject, allKnownTags) {
   // Copy prompt button (if aiFixPrompt exists)
   if (c.aiFixPrompt) {
     html += `<button class="copy-prompt-btn" onclick="copyPrompt('${id}')" title="Copy AI fix prompt to clipboard">&#x1F4CB; Prompt</button>`;
+    if (c.project_id) {
+      if (c.sentToIdeAt) {
+        html += `<button class="send-ide-btn sent" onclick="sendClipToIde('${id}')" title="Sent to IDE ${timeAgo(new Date(c.sentToIdeAt).getTime())} — click to resend">&#x2705; Sent</button>`;
+      } else {
+        html += `<button class="send-ide-btn" onclick="sendClipToIde('${id}')" title="Send prompt to IDE AI chat">&#x1F4E4; IDE</button>`;
+      }
+    }
   }
 
   // Manual AI trigger (if has comment but no AI summary, or no aiFixPrompt)

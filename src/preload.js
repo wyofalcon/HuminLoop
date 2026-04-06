@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('quickclip', {
   aiCategorize: (comment, imageData) => ipcRenderer.invoke('ai-categorize', comment, imageData),
   aiSearch: (query) => ipcRenderer.invoke('ai-search', query),
   summarizeProject: (projectId) => ipcRenderer.invoke('summarize-project', projectId),
+  combineClipsPrompt: (clipIds) => ipcRenderer.invoke('combine-clips-prompt', clipIds),
   hasApiKey: () => ipcRenderer.invoke('has-api-key'),
   getPromptBlocks: () => ipcRenderer.invoke('get-prompt-blocks'),
   savePromptBlocks: (enabled, custom) => ipcRenderer.invoke('save-prompt-blocks', enabled, custom),
@@ -51,6 +52,11 @@ contextBridge.exposeInMainWorld('quickclip', {
 
   // AI retrigger
   retriggerAi: (clipId) => ipcRenderer.invoke('retrigger-ai', clipId),
+
+  // Send to IDE
+  sendToIde: (clipId) => ipcRenderer.invoke('send-to-ide', clipId),
+  combineAndSendToIde: (clipIds, projectId) => ipcRenderer.invoke('combine-and-send-to-ide', clipIds, projectId),
+  onClipSentToIde: (cb) => ipcRenderer.on('clip-sent-to-ide', (_, data) => cb(data)),
 
   // Audit ledger
   getAuditLog: () => ipcRenderer.invoke('get-audit-log'),
@@ -94,6 +100,7 @@ contextBridge.exposeInMainWorld('quickclip', {
   // Events
   onClipsChanged: (cb) => ipcRenderer.on('clips-changed', () => cb()),
   onProjectsChanged: (cb) => ipcRenderer.on('projects-changed', () => cb()),
+  onPromptAutoCopied: (cb) => ipcRenderer.on('prompt-auto-copied', () => cb()),
 
   // App mode
   toggleAppMode: () => ipcRenderer.invoke('toggle-app-mode'),

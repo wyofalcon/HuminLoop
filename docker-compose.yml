@@ -1,16 +1,16 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: sciurus-db
+    container_name: huminloop-db
     restart: unless-stopped
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_DB: sciurus
-      POSTGRES_USER: sciurus
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sciurus_dev}
+      POSTGRES_DB: huminloop
+      POSTGRES_USER: huminloop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-huminloop_dev}
     volumes:
-      - sciurus_data:/var/lib/postgresql/data
+      - huminloop_data:/var/lib/postgresql/data
       - ./docker/init.sql:/docker-entrypoint-initdb.d/01-init.sql
     deploy:
       resources:
@@ -22,11 +22,11 @@ services:
           memory: 2G
     shm_size: 256mb
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sciurus"]
+      test: ["CMD-SHELL", "pg_isready -U huminloop"]
       interval: 5s
       timeout: 3s
       retries: 5
 
 volumes:
-  sciurus_data:
+  huminloop_data:
     driver: local

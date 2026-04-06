@@ -1,8 +1,8 @@
-# Sciurus Lite Mode Design
+# HuminLoop Lite Mode Design
 
 ## Overview
 
-Add a "Lite" mode to Sciurus — a stripped-down, single-clip-at-a-time UI focused on fast iteration during active development. The user annotates a screenshot (freehand drawing + text in red/green/pink), types a short note, and the app generates a single actionable coding prompt via AI. One clip displayed at a time, with prev/next navigation through a history of lite clips.
+Add a "Lite" mode to HuminLoop — a stripped-down, single-clip-at-a-time UI focused on fast iteration during active development. The user annotates a screenshot (freehand drawing + text in red/green/pink), types a short note, and the app generates a single actionable coding prompt via AI. One clip displayed at a time, with prev/next navigation through a history of lite clips.
 
 Lite mode lives inside the same Electron app as Full mode. A tray menu toggle switches between them.
 
@@ -15,7 +15,7 @@ Lite mode lives inside the same Electron app as Full mode. A tray menu toggle sw
   2. Close the current main window
   3. Open the new main window with the appropriate HTML (`index.html` or `lite-index.html`)
   4. Subsequent capture window opens use the matching variant (`capture.html` or `lite-capture.html`)
-- **Tray menu in lite mode:** Open Sciurus, Quick Capture, Show Toolbar, Switch to Full Mode, Quit.
+- **Tray menu in lite mode:** Open HuminLoop, Quick Capture, Show Toolbar, Switch to Full Mode, Quit.
 
 ## New Renderer Files
 
@@ -133,7 +133,7 @@ Stacked single-card layout, compact window (~450x600).
 
 From top to bottom:
 
-1. **Title bar** — "Sciurus Lite" label, active project selector dropdown (name + color dot), clip position indicator ("3 of 12"), settings gear icon
+1. **Title bar** — "HuminLoop Lite" label, active project selector dropdown (name + color dot), clip position indicator ("3 of 12"), settings gear icon
 2. **Screenshot preview** — large, shows the annotated screenshot
 3. **Note** — the user's typed note, read-only display
 4. **Generated Prompt** (hero element) — the AI-generated prompt in a styled block with a prominent "Copy" button. Cyan accent color, left border highlight.

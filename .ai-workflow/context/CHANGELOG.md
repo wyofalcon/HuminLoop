@@ -39,7 +39,7 @@
   - Installed: `.git/hooks/prepare-commit-msg`
   - Modified: `.gitignore`
   - Modified: `CLAUDE.md`
-**What:** Compiled agent instruction templates with Sciurus-specific architecture, component labels, conventions, and gotchas. Created Windows/Git Bash compatible workflow scripts (no tmux, no inotifywait). Installed prepare-commit-msg hook.
-**Why:** The `workflow/` directory contained generic Linux/tmux templates from the cvstomize project. Sciurus runs on Windows — needed compiled instructions with project-specific values and scripts that work in Git Bash without WSL.
+**What:** Compiled agent instruction templates with HuminLoop-specific architecture, component labels, conventions, and gotchas. Created Windows/Git Bash compatible workflow scripts (no tmux, no inotifywait). Installed prepare-commit-msg hook.
+**Why:** The `workflow/` directory contained generic Linux/tmux templates from the cvstomize project. HuminLoop runs on Windows — needed compiled instructions with project-specific values and scripts that work in Git Bash without WSL.
 **Alternatives:** Could have used WSL for the full Linux workflow, but that adds friction. Adapted the essential scripts (health check, status, prompt tracking, instruction composition) to run natively in Git Bash. Linux-only features (tmux sessions, inotifywait file watching, dashboards) left in `workflow/` for future WSL use.
 **Status:** Applied

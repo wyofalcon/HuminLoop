@@ -17,9 +17,23 @@ const { getActiveWindow } = require('./window-info');
 const images = require('./images');
 const workflowContext = require('./workflow-context');
 
+// ── .env path resolution ──
+// Packaged apps write to userData (writable on all platforms).
+// Dev mode writes next to project root (traditional __dirname/..).
+// On first packaged launch, migrate .env from the old location if present.
+
+const DEV_ENV_PATH = path.join(__dirname, '..', '.env');
+const ENV_PATH = app.isPackaged
+  ? path.join(app.getPath('userData'), '.env')
+  : DEV_ENV_PATH;
+
+// Migrate .env from old location (inside app resources) to userData
+if (app.isPackaged && !fs.existsSync(ENV_PATH) && fs.existsSync(DEV_ENV_PATH)) {
+  try { fs.copyFileSync(DEV_ENV_PATH, ENV_PATH); } catch {}
+}
+
 // ── .env loader (manual — dotenv v17 changed its API) ──
 
-const ENV_PATH = path.join(__dirname, '..', '.env');
 if (fs.existsSync(ENV_PATH)) {
   for (const line of fs.readFileSync(ENV_PATH, 'utf8').split('\n')) {
     const match = line.match(/^([^#=]+)=(.*)$/);
@@ -51,7 +65,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ALLOWED_CLIP_FIELDS = [
   'category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment',
-  'window_title', 'process_name', 'completed_at', 'archived', 'summarize_count',
+  'window_title', 'process_name', 'completed_at', 'archived', 'summarize_count', 'sent_to_ide_at',
 ];
 
 // Tiny 32x32 fallback icon (transparent PNG) for the system tray
@@ -113,11 +127,10 @@ async function getAppMode() {
 // ── First-Run Detection ──
 
 function isFirstRun() {
-  const envPath = path.join(__dirname, '..', '.env');
   // Also check if SQLite DB exists (for users who skipped Docker setup)
   let sqlitePath = null;
-  try { sqlitePath = path.join(app.getPath('userData'), 'sciurus.db'); } catch {}
-  return !fs.existsSync(envPath) && (!sqlitePath || !fs.existsSync(sqlitePath));
+  try { sqlitePath = path.join(app.getPath('userData'), 'huminloop.db'); } catch {}
+  return !fs.existsSync(ENV_PATH) && (!sqlitePath || !fs.existsSync(sqlitePath));
 }
 
 // ── Windows ──
@@ -125,7 +138,7 @@ function isFirstRun() {
 function createSetupWindow() {
   setupWindow = new BrowserWindow({
     width: 580, height: 680, show: false,
-    title: 'Sciurus — Setup',
+    title: 'HuminLoop — Setup',
     backgroundColor: '#13131f',
     resizable: false,
     webPreferences: {
@@ -148,7 +161,7 @@ async function createMainWindow() {
   const windowSize = mode === 'lite' ? { width: 900, height: 700 } : { width: 1100, height: 750 };
   mainWindow = new BrowserWindow({
     width: windowSize.width, height: windowSize.height, show: false,
-    title: 'Sciurus',
+    title: 'HuminLoop',
     backgroundColor: '#13131f',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -157,7 +170,7 @@ async function createMainWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', htmlFile));
-  if (process.env.SCIURUS_DEV === '1') mainWindow.webContents.openDevTools();
+  if (process.env.HUMINLOOP_DEV === '1') mainWindow.webContents.openDevTools();
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
@@ -433,7 +446,7 @@ ipcMain.handle('snippet-captured', async (_, dataUrl) => {
   destroyOverlayWindow();
 
   // Send the snippet to the capture popup (same flow as clipboard watcher)
-  const meta = preOverlayWindowMeta || { title: 'Screen Capture', processName: 'Sciurus Toolbar' };
+  const meta = preOverlayWindowMeta || { title: 'Screen Capture', processName: 'HuminLoop Toolbar' };
   preOverlayWindowMeta = null;
   await createCaptureWindow(dataUrl, meta);
 });
@@ -451,7 +464,7 @@ function startClipboardWatcher() {
       if (url) {
         // Capture active window metadata BEFORE opening popup
         const windowMeta = getActiveWindow();
-        console.log(`[Sciurus] Window context: ${windowMeta.processName} — ${windowMeta.title}`);
+        console.log(`[HuminLoop] Window context: ${windowMeta.processName} — ${windowMeta.title}`);
         await createCaptureWindow(url, windowMeta);
       }
     }
@@ -465,7 +478,7 @@ async function rebuildTrayMenu() {
   const mode = await getAppMode();
   const modeLabel = mode === 'lite' ? 'Switch to Full Mode' : 'Switch to Lite Mode';
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Sciurus', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+    { label: 'Open HuminLoop', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
     { label: 'Quick Capture', click: async () => await createCaptureWindow(null) },
     { label: 'Show Toolbar', click: () => createToolbarWindow() },
     { type: 'separator' },
@@ -494,7 +507,7 @@ function createTray() {
     icon = nativeImage.createFromDataURL(FALLBACK_TRAY_ICON);
   }
   tray = new Tray(icon);
-  tray.setToolTip('Sciurus');
+  tray.setToolTip('HuminLoop');
   rebuildTrayMenu();
   tray.on('click', () => { if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); } });
 }
@@ -512,12 +525,12 @@ async function migrateIfNeeded() {
     const existing = await db.getClips();
     if (existing.length > 0) return;
 
-    console.log(`[Sciurus] Migrating ${oldClips.length} clips from electron-store...`);
+    console.log(`[HuminLoop] Migrating ${oldClips.length} clips from electron-store...`);
     const oldCategories = oldStore.get('categories', DEFAULT_CATEGORIES);
     const ok = await db.migrateFromStore({ clips: oldClips, categories: oldCategories });
-    if (ok) console.log('[Sciurus] Migration complete.');
+    if (ok) console.log('[HuminLoop] Migration complete.');
   } catch (e) {
-    console.log('[Sciurus] No electron-store data to migrate (or already migrated).');
+    console.log('[HuminLoop] No electron-store data to migrate (or already migrated).');
   }
 }
 
@@ -529,7 +542,7 @@ async function retryUncategorized() {
   const clips = await db.getClips();
   const pending = clips.filter((c) => c.category === 'Uncategorized' && (c.comment || c.image));
   if (!pending.length) return;
-  console.log(`[Sciurus] Retrying AI for ${pending.length} uncategorized clip(s)...`);
+  console.log(`[HuminLoop] Retrying AI for ${pending.length} uncategorized clip(s)...`);
   for (const clip of pending) {
     await autoCategorize(clip.id, clip.comment || '', clip.image);
   }
@@ -562,7 +575,7 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
       const proj = await db.getProject(result.project_id);
       if (proj) {
         updates.project_id = result.project_id;
-        console.log(`[Sciurus] AI assigned to project: ${proj.name}`);
+        console.log(`[HuminLoop] AI assigned to project: ${proj.name}`);
       }
     }
 
@@ -577,10 +590,10 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
       notifyMainWindow('clips-changed');
       if (updates.project_id) notifyMainWindow('projects-changed');
     }
-    console.log(`[Sciurus] AI categorized: "${comment.slice(0, 30)}" → ${result.category}`);
+    console.log(`[HuminLoop] AI categorized: "${comment.slice(0, 30)}" → ${result.category}`);
     addAuditEntry('ai', `AI categorized clip ${clipId}: ${result.category}`);
   } catch (e) {
-    console.error('[Sciurus] Auto-categorize failed:', e.message);
+    console.error('[HuminLoop] Auto-categorize failed:', e.message);
   }
 }
 
@@ -601,11 +614,19 @@ async function autoCategorizeLite(clipId, comment, imageData, windowTitle, proce
     if (prompt) {
       await db.updateClip(clipId, { aiFixPrompt: prompt });
       notifyMainWindow('clips-changed');
-      console.log(`[Sciurus] Lite prompt generated for clip ${clipId}`);
+      console.log(`[HuminLoop] Lite prompt generated for clip ${clipId}`);
       addAuditEntry('ai', `Lite prompt generated for clip ${clipId}`);
+
+      // Auto-copy to clipboard if enabled
+      const aiSettings = await db.getSettings('ai');
+      if (aiSettings && aiSettings.autoCopyLitePrompt) {
+        clipboard.writeText(prompt);
+        notifyMainWindow('prompt-auto-copied');
+        console.log(`[HuminLoop] Lite prompt auto-copied to clipboard`);
+      }
     }
   } catch (e) {
-    console.error('[Sciurus] Lite prompt generation failed:', e.message);
+    console.error('[HuminLoop] Lite prompt generation failed:', e.message);
   }
 }
 
@@ -644,11 +665,11 @@ ipcMain.handle('save-clip', async (_, clip) => {
     const ruleResult = await rules.categorize(clip.window_title, clip.process_name, clip.comment);
     if (clip.category === 'Uncategorized' && ruleResult.category) {
       clip.category = ruleResult.category;
-      console.log(`[Sciurus] Rules matched category: ${ruleResult.category}`);
+      console.log(`[HuminLoop] Rules matched category: ${ruleResult.category}`);
     }
     if (!clip.project_id && ruleResult.projectId) {
       clip.project_id = ruleResult.projectId;
-      console.log(`[Sciurus] Rules matched project ID: ${ruleResult.projectId}`);
+      console.log(`[HuminLoop] Rules matched project ID: ${ruleResult.projectId}`);
     }
   }
 
@@ -659,17 +680,17 @@ ipcMain.handle('save-clip', async (_, clip) => {
   // AI categorization — runs if clip has content and AI is enabled.
   // Even if rules assigned a category/project, AI enriches with summary, tags, and fix prompts.
   if ((clip.comment || imageData) && ai.isEnabled()) {
-    console.log(`[Sciurus] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
+    console.log(`[HuminLoop] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
     // Always run standard categorization (summary, tags, category)
     autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
-      .catch(e => console.error('[Sciurus] Auto-categorize background error:', e.message));
+      .catch(e => console.error('[HuminLoop] Auto-categorize background error:', e.message));
     // In lite mode, also generate the focused fix prompt
     if (mode === 'lite') {
       autoCategorizeLite(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
-        .catch(e => console.error('[Sciurus] Lite prompt background error:', e.message));
+        .catch(e => console.error('[HuminLoop] Lite prompt background error:', e.message));
     }
   } else if (!ai.isEnabled()) {
-    console.log('[Sciurus] AI disabled — skipping categorization');
+    console.log('[HuminLoop] AI disabled — skipping categorization');
   }
   return true;
 });
@@ -716,7 +737,7 @@ ipcMain.handle('update-clip', async (_, id, updates) => {
             }
           }
         })
-        .catch((e) => console.error('[Sciurus] Auto AI re-categorize on edit error:', e.message));
+        .catch((e) => console.error('[HuminLoop] Auto AI re-categorize on edit error:', e.message));
     }
   }
   return true;
@@ -775,7 +796,7 @@ ipcMain.handle('assign-clip-to-project', async (_, clipId, projectId) => {
           db.updateClip(clipId, { aiFixPrompt: results[0].summary });
           notifyMainWindow('clips-changed');
         }
-      }).catch((e) => console.error('[Sciurus] Fix prompt generation failed:', e.message));
+      }).catch((e) => console.error('[HuminLoop] Fix prompt generation failed:', e.message));
     }
   }
   return true;
@@ -820,7 +841,16 @@ ipcMain.handle('save-categories', async (_, cats) => {
 ipcMain.handle('get-projects', () => db.getProjects());
 ipcMain.handle('get-project', (_, id) => db.getProject(id));
 
+// Normalize repo_path: strip quotes from "Copy as Path", strip .code-workspace filename
+function normalizeRepoPath(p) {
+  if (!p) return p;
+  p = p.replace(/^["']|["']$/g, '').trim(); // strip wrapping quotes
+  p = p.replace(/[\\/][^\\/]+\.code-workspace$/i, ''); // strip workspace file
+  return p;
+}
+
 ipcMain.handle('create-project', async (_, data) => {
+  if (data.repo_path) data.repo_path = normalizeRepoPath(data.repo_path);
   const project = await db.createProject(data);
   rules.invalidateCache();
   notifyMainWindow('projects-changed');
@@ -828,6 +858,7 @@ ipcMain.handle('create-project', async (_, data) => {
 });
 
 ipcMain.handle('update-project', async (_, id, data) => {
+  if (data.repo_path) data.repo_path = normalizeRepoPath(data.repo_path);
   const project = await db.updateProject(id, data);
   rules.invalidateCache();
   notifyMainWindow('projects-changed');
@@ -901,6 +932,92 @@ ipcMain.handle('summarize-project', async (_, projectId) => {
     timestamp: c.timestamp,
     summarizeCount: c.summarizeCount || 0,
   }));
+});
+
+ipcMain.handle('combine-clips-prompt', async (_, clipIds) => {
+  if (!Array.isArray(clipIds) || clipIds.length === 0) return '';
+  const allClips = await db.getClips();
+  const selected = allClips.filter((c) => clipIds.includes(c.id));
+  if (selected.length === 0) return '';
+
+  const notes = selected.map((c) => {
+    const raw = images.loadImage(c.id);
+    return {
+      id: c.id,
+      comment: c.comment || '',
+      imageDataURL: raw ? images.compressForAI(raw) : null,
+    };
+  });
+
+  const prompt = await ai.generateCombinedPrompt(notes);
+  addAuditEntry('combine-prompt', `Combined ${selected.length} clips: ${clipIds.join(', ')}`);
+  return prompt;
+});
+
+// ── IPC Handlers: Send to IDE ──
+
+ipcMain.handle('send-to-ide', async (_, clipId) => {
+  const clip = await db.getClip(clipId);
+  if (!clip) throw new Error('Clip not found');
+  if (!clip.aiFixPrompt) throw new Error('Clip has no AI prompt yet');
+  if (!clip.project_id) throw new Error('Clip not assigned to a project');
+  const project = await db.getProject(clip.project_id);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+  if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+
+  // Write prompt
+  fs.writeFileSync(path.join(contextDir, 'IDE_PROMPT.md'), clip.aiFixPrompt, 'utf8');
+
+  // Write image if available
+  const dataUrl = images.loadImage(clipId);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, 'ide-prompt-image.png'), Buffer.from(base64, 'base64'));
+  }
+
+  // Mark clip as sent to IDE
+  await db.updateClip(clipId, { sent_to_ide_at: new Date().toISOString() });
+
+  addAuditEntry('send-to-ide', `Clip ${clipId} prompt staged for IDE at ${project.repo_path}`);
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('clip-sent-to-ide', { clipId, projectName: project.name });
+  return { success: true, path: project.repo_path };
+});
+
+ipcMain.handle('combine-and-send-to-ide', async (_, clipIds, projectId) => {
+  if (!Array.isArray(clipIds) || clipIds.length === 0) throw new Error('No clips provided');
+  if (!projectId) throw new Error('project_id required');
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const allClips = await db.getClips();
+  const selected = allClips.filter((c) => clipIds.includes(c.id));
+  if (selected.length === 0) throw new Error('No matching clips');
+
+  const notes = selected.map((c) => {
+    const raw = images.loadImage(c.id);
+    return { id: c.id, comment: c.comment || '', imageDataURL: raw ? images.compressForAI(raw) : null };
+  });
+
+  const prompt = await ai.generateCombinedPrompt(notes);
+  if (!prompt) throw new Error('AI prompt generation failed');
+
+  const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+  if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+  fs.writeFileSync(path.join(contextDir, 'IDE_PROMPT.md'), prompt, 'utf8');
+
+  // Mark all selected clips as sent to IDE
+  const sentAt = new Date().toISOString();
+  for (const c of selected) {
+    await db.updateClip(c.id, { sent_to_ide_at: sentAt });
+  }
+
+  addAuditEntry('send-to-ide', `Combined ${selected.length} clips staged for IDE at ${project.repo_path}`);
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('clip-sent-to-ide', { clipIds, projectName: project.name });
+  return { success: true, prompt, path: project.repo_path };
 });
 
 // ── IPC Handlers: AI Prompt ──
@@ -1091,7 +1208,7 @@ ipcMain.handle('setup-check-docker', async () => {
 
 ipcMain.handle('setup-check-db', async () => {
   try {
-    const out = execSync('docker ps --filter name=sciurus-db --format "{{.Status}}"', { encoding: 'utf8', timeout: 5000 });
+    const out = execSync('docker ps --filter name=huminloop-db --format "{{.Status}}"', { encoding: 'utf8', timeout: 5000 });
     return { running: out.trim().length > 0 };
   } catch {
     return { running: false };
@@ -1139,13 +1256,12 @@ ipcMain.handle('setup-check-credentials', async () => {
 });
 
 ipcMain.handle('setup-save-env', async (_, key, value) => {
-  const envPath = path.join(__dirname, '..', '.env');
   // Validate key/value to prevent injection
   if (!/^[A-Z_][A-Z0-9_]*$/i.test(key)) return false;
   const safeValue = String(value).replace(/[\r\n]/g, '').trim();
   let content = '';
-  if (fs.existsSync(envPath)) {
-    content = fs.readFileSync(envPath, 'utf8');
+  if (fs.existsSync(ENV_PATH)) {
+    content = fs.readFileSync(ENV_PATH, 'utf8');
   }
   // Replace existing key or append
   const regex = new RegExp(`^${key}=.*$`, 'm');
@@ -1154,7 +1270,7 @@ ipcMain.handle('setup-save-env', async (_, key, value) => {
   } else {
     content = content.trimEnd() + `\n${key}=${safeValue}\n`;
   }
-  fs.writeFileSync(envPath, content, 'utf8');
+  fs.writeFileSync(ENV_PATH, content, 'utf8');
   // Also set in current process
   process.env[key] = safeValue;
   return true;
@@ -1171,8 +1287,7 @@ ipcMain.handle('setup-use-sqlite', async () => {
 });
 
 ipcMain.handle('setup-finish', async () => {
-  const envPath = path.join(__dirname, '..', '.env');
-  let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf8') : '';
 
   // Always write hotkey default
   const defaults = { HOTKEY_COMBO: 'ctrl+shift+q' };
@@ -1183,9 +1298,9 @@ ipcMain.handle('setup-finish', async () => {
       DB_BACKEND: 'pg',
       POSTGRES_HOST: 'localhost',
       POSTGRES_PORT: '5433',
-      POSTGRES_DB: 'sciurus',
-      POSTGRES_USER: 'sciurus',
-      POSTGRES_PASSWORD: 'sciurus_dev',
+      POSTGRES_DB: 'huminloop',
+      POSTGRES_USER: 'huminloop',
+      POSTGRES_PASSWORD: 'huminloop_dev',
     });
   } else {
     if (!content.includes('DB_BACKEND=')) {
@@ -1200,7 +1315,7 @@ ipcMain.handle('setup-finish', async () => {
       process.env[k] = v;
     }
   }
-  fs.writeFileSync(envPath, content, 'utf8');
+  fs.writeFileSync(ENV_PATH, content, 'utf8');
 
   // Close setup window and launch the main app
   if (setupWindow && !setupWindow.isDestroyed()) {
@@ -1212,7 +1327,7 @@ ipcMain.handle('setup-finish', async () => {
 // ── Auto-launch on login ──
 
 if (app.isPackaged && process.platform === 'win32') {
-  app.setLoginItemSettings({ openAtLogin: true, name: 'Sciurus' });
+  app.setLoginItemSettings({ openAtLogin: true, name: 'HuminLoop' });
 }
 
 // ── App Lifecycle ──
@@ -1223,14 +1338,14 @@ async function launchMainApp() {
   const dbReady = await db.init();
   if (!dbReady) {
     dialog.showErrorBox(
-      'Sciurus — Database Error',
-      'Could not initialize any database backend.\n\nEither:\n  • Start Docker: docker compose up -d\n  • Or install better-sqlite3: npm install\n\nThen restart Sciurus.'
+      'HuminLoop — Database Error',
+      'Could not initialize any database backend.\n\nEither:\n  • Start Docker: docker compose up -d\n  • Or install better-sqlite3: npm install\n\nThen restart HuminLoop.'
     );
     isQuitting = true;
     app.quit();
     return;
   }
-  console.log(`[Sciurus] Database backend: ${db.getBackendName()}`);
+  console.log(`[HuminLoop] Database backend: ${db.getBackendName()}`);
 
   // One-time migration from electron-store
   await migrateIfNeeded();
@@ -1250,7 +1365,7 @@ async function launchMainApp() {
   const savedBlocks = await db.getSettings('prompt_blocks');
   if (savedBlocks && savedBlocks.enabled) {
     ai.setPromptBlocks(savedBlocks.enabled, savedBlocks.custom || []);
-    console.log('[Sciurus] Custom prompt config loaded from settings');
+    console.log('[HuminLoop] Custom prompt config loaded from settings');
   }
   retryUncategorized();
 
@@ -1263,12 +1378,12 @@ async function launchMainApp() {
 
   // Auto-purge trash items older than 30 days
   db.purgeTrash(30).then((n) => {
-    if (n > 0) console.log(`[Sciurus] Purged ${n} old trashed clip(s)`);
-  }).catch((e) => console.error('[Sciurus] Trash purge failed:', e.message));
+    if (n > 0) console.log(`[HuminLoop] Purged ${n} old trashed clip(s)`);
+  }).catch((e) => console.error('[HuminLoop] Trash purge failed:', e.message));
 
   // One-time migration: move archived clips to trash
   db.migrateArchivedToTrash().catch((e) =>
-    console.error('[Sciurus] Archive→Trash migration failed:', e.message)
+    console.error('[HuminLoop] Archive→Trash migration failed:', e.message)
   );
 
   const hotkey = process.env.HOTKEY_COMBO || 'CommandOrControl+Shift+Q';

@@ -146,7 +146,7 @@ async function checkCredentials() {
   } else {
     icon.textContent = '\u2717';
     icon.classList.add('err');
-    status.textContent = 'Not found — place credentials.json in the Sciurus folder';
+    status.textContent = 'Not found — place credentials.json in the HuminLoop folder';
   }
 }
 

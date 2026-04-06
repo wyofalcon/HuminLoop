@@ -1,8 +1,9 @@
 {
-  "name": "sciurus",
+  "name": "huminloop",
   "version": "2.0.0",
-  "description": "Sciurus! — ADHD-friendly knowledge capture. Screenshot, note, done. AI handles the rest.",
+  "description": "HuminLoop — ADHD-friendly knowledge capture. Screenshot, note, done. AI handles the rest.",
   "author": "wyofalcon@gmail.com",
+  "license": "MIT",
   "main": "src/main.js",
   "scripts": {
     "start": "node scripts/launch.js",
@@ -25,8 +26,8 @@
     "electron-builder": "^25.0.0"
   },
   "build": {
-    "appId": "com.sciurus.app",
-    "productName": "Sciurus",
+    "appId": "com.huminloop.app",
+    "productName": "HuminLoop",
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
@@ -44,9 +45,9 @@
       "icon": "assets/icon.png",
       "category": "Utility",
       "desktop": {
-        "Name": "Sciurus",
+        "Name": "HuminLoop",
         "Comment": "ADHD-friendly knowledge capture",
-        "StartupWMClass": "sciurus"
+        "StartupWMClass": "huminloop"
       }
     },
     "nsis": {
@@ -68,6 +69,10 @@
         ]
       }
     ],
-    "publish": null
+    "publish": {
+      "provider": "github",
+      "owner": "wyofalcon",
+      "repo": "huminloop"
+    }
   }
 }

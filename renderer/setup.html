@@ -2,13 +2,13 @@
 <html><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;">
-<title>Sciurus! — Setup</title>
+<title>HuminLoop! — Setup</title>
 <link rel="stylesheet" href="setup.css">
 </head><body>
 
 <div class="wizard">
   <div class="wizard-header">
-    <h1>Sciurus!</h1>
+    <h1>HuminLoop!</h1>
     <p class="subtitle">Let's get you set up. This takes about 2 minutes.</p>
   </div>
 
@@ -25,7 +25,7 @@
   <!-- Step 1: Docker / Database -->
   <div class="step-content" id="step-1">
     <h2>Database Setup</h2>
-    <p>Sciurus stores your notes in a local PostgreSQL database running in Docker.</p>
+    <p>HuminLoop stores your notes in a local PostgreSQL database running in Docker.</p>
 
     <div class="check-row" id="dockerCheck">
       <span class="check-icon" id="dockerIcon">...</span>
@@ -74,7 +74,7 @@
   <!-- Step 2: AI Setup -->
   <div class="step-content hidden" id="step-2">
     <h2>AI Setup <span class="optional-badge">Optional</span></h2>
-    <p>Sciurus uses Google's Gemini AI to auto-categorize your screenshots and enable natural language search. You can skip this and add it later in Settings.</p>
+    <p>HuminLoop uses Google's Gemini AI to auto-categorize your screenshots and enable natural language search. You can skip this and add it later in Settings.</p>
 
     <div class="ai-options">
       <div class="ai-option" id="optApiKey" onclick="selectAiOption('apikey')">
@@ -97,7 +97,7 @@
           <input type="radio" name="aiopt" value="skip">
           <strong>Skip for now</strong>
         </div>
-        <p>Use Sciurus without AI. You can set this up later.</p>
+        <p>Use HuminLoop without AI. You can set this up later.</p>
       </div>
     </div>
 
@@ -125,7 +125,7 @@
           <li>Enable the <strong>Vertex AI API</strong></li>
           <li>Create a <strong>Service Account</strong> under Credentials</li>
           <li>Download the JSON key file</li>
-          <li>Save it as <code>credentials.json</code> in the Sciurus folder</li>
+          <li>Save it as <code>credentials.json</code> in the HuminLoop folder</li>
         </ol>
       </div>
       <div class="check-row" id="credCheck">
@@ -148,7 +148,7 @@
     <h2>All Set!</h2>
     <div class="done-summary">
       <div class="done-icon">&#x1F43F;</div>
-      <p>Sciurus is ready to capture your knowledge.</p>
+      <p>HuminLoop is ready to capture your knowledge.</p>
 
       <div class="summary-card">
         <div class="summary-row">
@@ -176,7 +176,7 @@
     </div>
 
     <div class="step-actions">
-      <button class="btn primary big" onclick="finishSetup()">Launch Sciurus!</button>
+      <button class="btn primary big" onclick="finishSetup()">Launch HuminLoop!</button>
     </div>
   </div>
 </div>

@@ -1574,6 +1574,93 @@ ipcMain.handle('setup-finish', async () => {
   await launchMainApp();
 });
 
+// ── IPC Handlers: IDE Setup ──
+
+ipcMain.handle('detect-ide', async (_, repoPath) => {
+  const result = { vsCodeInstalled: false, claudeCodeExtension: false, mcpConfigured: false };
+
+  // Check VS Code CLI
+  try {
+    execSync('code --version', { encoding: 'utf8', timeout: 5000 });
+    result.vsCodeInstalled = true;
+  } catch {}
+
+  // Check Claude Code extension
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  const extDir = path.join(home, '.vscode', 'extensions');
+  try {
+    const dirs = fs.readdirSync(extDir);
+    result.claudeCodeExtension = dirs.some(d => d.startsWith('anthropic.claude-code'));
+  } catch {}
+
+  // Check MCP config
+  if (repoPath) {
+    const mcpPath = path.join(repoPath, '.vscode', 'mcp.json');
+    try {
+      const config = JSON.parse(fs.readFileSync(mcpPath, 'utf8'));
+      result.mcpConfigured = !!(config.servers?.huminloop || config.mcpServers?.huminloop);
+    } catch {}
+  }
+
+  return result;
+});
+
+ipcMain.handle('generate-mcp-config', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const mcpServerPath = path.join(__dirname, '..', 'mcp-server', 'index.js').replace(/\\/g, '/');
+  const apiPort = process.env.HUMINLOOP_API_PORT || '7277';
+
+  return {
+    servers: {
+      huminloop: {
+        command: 'node',
+        args: [mcpServerPath],
+        env: {
+          HUMINLOOP_API_PORT: apiPort,
+          PROJECT_ROOT: project.repo_path.replace(/\\/g, '/'),
+        },
+      },
+    },
+  };
+});
+
+ipcMain.handle('write-mcp-config', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const mcpServerPath = path.join(__dirname, '..', 'mcp-server', 'index.js').replace(/\\/g, '/');
+  const apiPort = process.env.HUMINLOOP_API_PORT || '7277';
+  const mcpConfig = {
+    servers: {
+      huminloop: {
+        command: 'node',
+        args: [mcpServerPath],
+        env: {
+          HUMINLOOP_API_PORT: apiPort,
+          PROJECT_ROOT: project.repo_path.replace(/\\/g, '/'),
+        },
+      },
+    },
+  };
+
+  const vscodeDir = path.join(project.repo_path, '.vscode');
+  if (!fs.existsSync(vscodeDir)) fs.mkdirSync(vscodeDir, { recursive: true });
+
+  const mcpPath = path.join(vscodeDir, 'mcp.json');
+  let existing = {};
+  try { existing = JSON.parse(fs.readFileSync(mcpPath, 'utf8')); } catch {}
+
+  // Merge — don't overwrite other servers
+  existing.servers = existing.servers || {};
+  existing.servers.huminloop = mcpConfig.servers.huminloop;
+
+  fs.writeFileSync(mcpPath, JSON.stringify(existing, null, 2), 'utf8');
+  addAuditEntry('ide-setup', `MCP config written for ${project.name} at ${mcpPath}`);
+  return { success: true, path: mcpPath };
+});
+
 // ── Auto-launch on login ──
 
 if (app.isPackaged && process.platform === 'win32') {

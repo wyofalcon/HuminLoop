@@ -117,6 +117,11 @@ contextBridge.exposeInMainWorld('quickclip', {
   setFocusedActiveProject: (projectId) => ipcRenderer.invoke('set-focused-active-project', projectId),
   // toggleProjectIde removed — IDE connection auto-detected via MCP heartbeats
 
+  // IDE Setup
+  detectIde: (repoPath) => ipcRenderer.invoke('detect-ide', repoPath),
+  generateMcpConfig: (projectId) => ipcRenderer.invoke('generate-mcp-config', projectId),
+  writeMcpConfig: (projectId) => ipcRenderer.invoke('write-mcp-config', projectId),
+
   // Setup wizard
   checkDocker: () => ipcRenderer.invoke('setup-check-docker'),
   checkDb: () => ipcRenderer.invoke('setup-check-db'),

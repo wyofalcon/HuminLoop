@@ -60,13 +60,13 @@ Renderer (5 windows + 2 overlays)   Main Process (src/main.js)
   index.html  — notes viewer           ├─ Tray + global hotkey (Ctrl+Shift+Q)
     Full: 4 tabs (Notes, Projects,     │
           Workflow, Settings)          │
-    Lite: Projects only + mode label   │
+    Focused: Projects only + mode label │
   capture.html — full capture popup    │─ Clipboard watcher (1s poll)
-  lite-capture.html — lite capture     │─ Window metadata capture
+  focused-capture.html — focused capture │─ Window metadata capture
   setup.html  — first-run wizard       │─ IPC handlers + event emitters
   toolbar.html — floating draw bar     │─ Background AI tasks
   overlay.html — fullscreen annotator  │─ HTTP API server (localhost:7277)
-         ↕ IPC (preload.js)            │─ Mode switching (full ↔ lite)
+         ↕ IPC (preload.js)            │─ Mode switching (full ↔ focused)
                                         ↓
                                    Module Layer
                                      db.js → db-pg.js | db-sqlite.js
@@ -84,16 +84,16 @@ MCP Server (mcp-server/)       Workflow System (workflow/)
   Calls HTTP API ↑               Templates + scripts for agent instructions
 ```
 
-### Lite Mode
+### Focused Mode
 
-Toggleable via tray menu ("Switch to Lite/Full Mode"). Stored as `app_mode` setting (`'full'` or `'lite'`).
+Toggleable via tray menu ("Switch to Focused/Full Mode"). Stored as `app_mode` setting (`'full'` or `'focused'`).
 
-- **Same renderer** (`index.html`) with JS-driven tab hiding — General Notes and Workflow tabs hidden, Projects tab forced active, "Lite Mode" label in header
-- **Lite capture popup** (`lite-capture.html`) — stripped down: screenshot + note + "Save & Generate Prompt" button only
-- **Project-focused** — user must select a single active project; "All Projects" hidden from sidebar; project selection synced to `lite_active_project` setting
-- **AI prompt generation** — `autoCategorizeLite()` calls `ai.generateLitePrompt()` using a dedicated prompt template that interprets annotation colors (red=remove, green=add, pink=reference) and prioritizes the user's note over annotations. Standard `autoCategorize()` also runs in parallel for summary/tags.
-- **Workflow context bridge** — `workflow-context.js` reads `SESSION.md` and `AUDIT_LOG.md` from the active project's `repo_path/.ai-workflow/context/` and feeds them into the lite prompt. This is the first runtime connection between the workflow system and AI — full mode will reuse this later.
-- **Clip filtering** — `source` column on clips (`'full'` or `'lite'`); lite clips auto-filtered by active project. AI cannot override project assignment in lite mode.
+- **Same renderer** (`index.html`) with JS-driven tab hiding — General Notes and Workflow tabs hidden, Projects tab forced active, "Focused Mode" label in header
+- **Focused capture popup** (`focused-capture.html`) — stripped down: screenshot + note + "Save & Generate Prompt" button only
+- **Project-focused** — user must select a single active project; "All Projects" hidden from sidebar; project selection synced to `focused_active_project` setting
+- **AI prompt generation** — `autoCategorizeFocused()` calls `ai.generateFocusedPrompt()` using a dedicated prompt template that interprets annotation colors (red=remove, green=add, pink=reference) and prioritizes the user's note over annotations. Standard `autoCategorize()` also runs in parallel for summary/tags.
+- **Workflow context bridge** — `workflow-context.js` reads `SESSION.md` and `AUDIT_LOG.md` from the active project's `repo_path/.ai-workflow/context/` and feeds them into the focused prompt. This is the first runtime connection between the workflow system and AI — full mode will reuse this later.
+- **Clip filtering** — `source` column on clips (`'full'` or `'focused'`); focused clips auto-filtered by active project. AI cannot override project assignment in focused mode.
 - **Active-in-IDE** — projects have an `active_in_ide` toggle (green dot in sidebar, "IN IDE" badge in detail view)
 - **Show/hide completed** — checkbox toggle in project detail to filter completed clips
 
@@ -114,12 +114,12 @@ Floating annotation toolbar + fullscreen transparent overlay for drawing on scre
 4. AI enriches asynchronously (summary, tags, URL extraction, fix prompts)
 5. Main window updates via IPC event
 
-**Lite mode:**
+**Focused mode:**
 1. User draws annotations on screen via toolbar/overlay (red/green/pink + text tool)
-2. Takes snippet or presses hotkey → lite capture popup opens
+2. Takes snippet or presses hotkey → focused capture popup opens
 3. User types note describing what needs to change → saves clip
-4. Main process injects `source: 'lite'` and active project ID
-5. `autoCategorize()` runs for summary/tags + `autoCategorizeLite()` runs for focused coding prompt (parallel)
+4. Main process injects `source: 'focused'` and active project ID
+5. `autoCategorize()` runs for summary/tags + `autoCategorizeFocused()` runs for focused coding prompt (parallel)
 6. Prompt appears in clip card, ready to copy into AI coding tool
 
 **Send to IDE (staging file bridge):**
@@ -197,7 +197,7 @@ When adding new DB operations, implement in both `db-pg.js` and `db-sqlite.js`, 
 - 30-second abort on all API calls
 - Cached Vertex AI access tokens with 60s refresh buffer
 - Image compression: max 800px width, JPEG for AI payloads (~70% reduction)
-- `generateLitePrompt()` — dedicated function for lite mode; uses `LITE_PROMPT` template with annotation color semantics; calls `callGemini()` with `{ raw: true }` to get plain text instead of JSON; enriched with project context and workflow session data
+- `generateFocusedPrompt()` — dedicated function for focused mode; uses `FOCUSED_PROMPT` template with annotation color semantics; calls `callGemini()` with `{ raw: true }` to get plain text instead of JSON; enriched with project context and workflow session data
 
 ### Rules Engine (`src/rules.js`)
 
@@ -210,7 +210,7 @@ Rules run first (instant). If AI is enabled, it runs async in background — enr
 ### Clip Lifecycle
 
 - **Create (full):** save-clip → rules categorize → AI enriches async → `clips-changed` event
-- **Create (lite):** save-clip → source='lite' + project injected → rules → AI summary + lite prompt (parallel) → `clips-changed` event
+- **Create (focused):** save-clip → source='focused' + project injected → rules → AI summary + focused prompt (parallel) → `clips-changed` event
 - **Complete:** sets `completed_at`, optionally trashes (archive = soft delete via `deleted_at`)
 - **Trash:** soft-delete sets `deleted_at`, restorable; auto-purge after 30 days on app launch
 - **Permanent delete:** removes from DB + deletes image from disk
@@ -220,7 +220,7 @@ Rules run first (instant). If AI is enabled, it runs async in background — enr
 
 `renderer/index.js` is a large single-file (~2500 lines) that drives the main notes viewer. It manages tabs (General Notes, Projects, Workflow, Settings, Help), filtering, sorting, and all UI rendering via DOM manipulation (no framework). HTML escaping uses `esc()` and `escAttr()` helpers — always use these for user content.
 
-**Lite mode adaptation:** On startup, `index.js` checks `getAppMode()`. If lite, it hides the General Notes and Workflow tabs, forces Projects tab active, adds a "Lite Mode" label to the header, hides "All Projects" from the sidebar, auto-selects the `lite_active_project`, and shows a lite-specific help page. The `isLiteMode` flag gates these behaviors throughout rendering.
+**Focused mode adaptation:** On startup, `index.js` checks `getAppMode()`. If focused, it hides the General Notes and Workflow tabs, forces Projects tab active, adds a "Focused Mode" label to the header, hides "All Projects" from the sidebar, auto-selects the `focused_active_project`, and shows a focused-specific help page. The `isFocusedMode` flag gates these behaviors throughout rendering.
 
 ### Workflow Tab
 
@@ -301,9 +301,9 @@ Use these labels when discussing parts of the system. They are the canonical sho
 | Label | Component | Location |
 |-------|-----------|----------|
 | `main` | Electron main process | `src/main.js` |
-| `viewer` | Notes viewer window (full + lite) | `renderer/index.*` |
+| `viewer` | Notes viewer window (full + focused) | `renderer/index.*` |
 | `capture` | Full capture popup | `renderer/capture.*` |
-| `lite-capture` | Lite capture popup | `renderer/lite-capture.*` |
+| `focused-capture` | Focused capture popup | `renderer/focused-capture.*` |
 | `toolbar` | Floating annotation toolbar | `renderer/toolbar.*` |
 | `overlay` | Fullscreen draw/text overlay | `renderer/overlay.*` |
 | `wizard` | First-run setup window | `renderer/setup.*` |
@@ -350,9 +350,9 @@ Use these labels when discussing parts of the system. They are the canonical sho
 | `summary` | AI-generated filing label per clip (`aiSummary`) |
 | `audit` | Action log entry (create/update/delete/AI) |
 | `rule` | Window rule for pattern-based categorization |
-| `source` | Clip origin flag: `'full'` or `'lite'` |
+| `source` | Clip origin flag: `'full'` or `'focused'` |
 | `active-in-ide` | Project flag indicating it's open in user's IDE |
-| `lite-prompt` | AI-generated coding prompt from annotated screenshot |
+| `focused-prompt` | AI-generated coding prompt from annotated screenshot |
 
 ## Key Conventions
 

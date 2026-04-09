@@ -148,6 +148,14 @@ async function migrateV2() {
   // Migrate clip source field
   await db.runRaw(`UPDATE clips SET source = 'focused' WHERE source = 'lite'`);
 
+  // Migrate autoCopyLitePrompt inside AI settings blob
+  const aiSettings = await db.getSettings('ai');
+  if (aiSettings && aiSettings.autoCopyLitePrompt !== undefined) {
+    aiSettings.autoCopyFocusedPrompt = aiSettings.autoCopyLitePrompt;
+    delete aiSettings.autoCopyLitePrompt;
+    await db.saveSetting('ai', aiSettings);
+  }
+
   await db.saveSetting('migration_v2_done', true);
   console.log('[HuminLoop] v2 migration complete');
 }

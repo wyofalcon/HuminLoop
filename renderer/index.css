@@ -1617,6 +1617,61 @@ kbd {
   transform: translateX(-50%) translateY(0);
 }
 
+#huminloop-action-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  max-width: 360px;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  padding: 14px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(20px);
+  transition: opacity 0.25s, transform 0.25s;
+  z-index: 9999;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+#huminloop-action-toast.show {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+#huminloop-action-toast .action-toast-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+#huminloop-action-toast .action-toast-msg {
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  word-break: break-word;
+}
+#huminloop-action-toast .action-toast-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+#huminloop-action-toast .action-toast-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#huminloop-action-toast .action-toast-btn:hover { background: var(--bg-input); }
+#huminloop-action-toast .action-toast-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+#huminloop-action-toast .action-toast-btn.primary:hover { filter: brightness(1.1); }
+
 /* ── Clip Selection + Combine ── */
 
 .clip.select-mode { cursor: pointer; }

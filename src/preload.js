@@ -114,6 +114,13 @@ contextBridge.exposeInMainWorld('quickclip', {
   onProjectsChanged: (cb) => ipcRenderer.on('projects-changed', () => cb()),
   onPromptAutoCopied: (cb) => ipcRenderer.on('prompt-auto-copied', () => cb()),
 
+  // Workspace auto-register
+  onWorkspaceProposed: (cb) => ipcRenderer.on('workspace-proposed', (_, data) => cb(data)),
+  getPendingWorkspaceProposal: () => ipcRenderer.invoke('get-pending-workspace-proposal'),
+  registerWorkspace: (data) => ipcRenderer.invoke('register-workspace', data),
+  ignoreWorkspace: (data) => ipcRenderer.invoke('ignore-workspace', data),
+  dismissWorkspaceProposal: () => ipcRenderer.invoke('dismiss-workspace-proposal'),
+
   // App mode
   toggleAppMode: () => ipcRenderer.invoke('toggle-app-mode'),
   getAppMode: () => ipcRenderer.invoke('get-app-mode'),

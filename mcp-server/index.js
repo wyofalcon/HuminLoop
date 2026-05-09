@@ -62,13 +62,24 @@ function imageContent(base64, mimeType = 'image/png') {
 // ── Project Matching ──
 
 let _cachedProject = undefined;
+const _proposedThisSession = new Set();
+
 async function matchProject() {
   if (_cachedProject !== undefined) return _cachedProject;
   const projects = await api('GET', '/api/projects');
   const norm = p => p.replace(/\\/g, '/').replace(/\/[^/]+\.code-workspace$/i, '').replace(/\/+$/, '').toLowerCase();
   const match = projects.find(p => p.repo_path && norm(p.repo_path) === norm(PROJECT_ROOT));
   _cachedProject = match || null;
+  if (!match) proposeWorkspaceOnce(PROJECT_ROOT).catch(() => {});
   return _cachedProject;
+}
+
+async function proposeWorkspaceOnce(root) {
+  const key = root.toLowerCase();
+  if (_proposedThisSession.has(key)) return;
+  _proposedThisSession.add(key);
+  const name = root.replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).pop() || 'Workspace';
+  try { await api('POST', '/api/workspace/propose', { root, name }); } catch { /* viewer may be closed */ }
 }
 
 // ── IDE Heartbeat ──

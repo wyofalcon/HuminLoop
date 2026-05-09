@@ -169,6 +169,65 @@ function showToast(msg) {
   setTimeout(() => toast.classList.remove('show'), 2500);
 }
 
+// Action toast: corner notification with one or more clickable buttons.
+// actions: [{ label, primary?, onClick }]
+function showActionToast({ title, message, actions, sticky }) {
+  let toast = document.getElementById('huminloop-action-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'huminloop-action-toast';
+    document.body.appendChild(toast);
+  }
+  toast.innerHTML = '';
+  if (title) {
+    const t = document.createElement('div');
+    t.className = 'action-toast-title';
+    t.textContent = title;
+    toast.appendChild(t);
+  }
+  if (message) {
+    const m = document.createElement('div');
+    m.className = 'action-toast-msg';
+    m.textContent = message;
+    toast.appendChild(m);
+  }
+  const row = document.createElement('div');
+  row.className = 'action-toast-row';
+  (actions || []).forEach(a => {
+    const btn = document.createElement('button');
+    btn.className = 'action-toast-btn' + (a.primary ? ' primary' : '');
+    btn.textContent = a.label;
+    btn.addEventListener('click', () => {
+      try { a.onClick && a.onClick(); } finally { toast.classList.remove('show'); }
+    });
+    row.appendChild(btn);
+  });
+  toast.appendChild(row);
+  toast.classList.add('show');
+  if (!sticky) setTimeout(() => toast.classList.remove('show'), 30000);
+}
+
+function showWorkspaceProposal(data) {
+  if (!data || !data.root) return;
+  const name = data.name || data.root.split(/[\\/]/).filter(Boolean).pop() || 'Workspace';
+  showActionToast({
+    title: 'Register this workspace?',
+    message: `An IDE just connected from ${data.root}. Register it as a HuminLoop project?`,
+    sticky: true,
+    actions: [
+      { label: 'Register', primary: true, onClick: async () => {
+        const project = await window.quickclip.registerWorkspace({ root: data.root, name });
+        if (project) showToast(`Registered "${project.name}"`);
+      } },
+      { label: 'Not now', onClick: () => window.quickclip.dismissWorkspaceProposal() },
+      { label: "Don't ask again", onClick: () => window.quickclip.ignoreWorkspace({ root: data.root }) },
+    ],
+  });
+}
+
+window.quickclip.onWorkspaceProposed((data) => showWorkspaceProposal(data));
+window.quickclip.getPendingWorkspaceProposal().then(p => { if (p) showWorkspaceProposal(p); });
+
 // ── Escaping ──
 
 function esc(s) {

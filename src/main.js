@@ -10,6 +10,12 @@ process.stderr?.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
 const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen, dialog, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// WSLg's GPU stack repeatedly fails to init, leaving the window mapped but unrendered (taskbar
+// entry visible, no GUI). Force software rendering inside WSL so the renderer can actually paint.
+if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) {
+  app.disableHardwareAcceleration();
+}
 const db = require('./db');
 const ai = require('./ai');
 const rules = require('./rules');
@@ -208,6 +214,15 @@ function notifyMainWindow(channel, data) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, data);
   }
+}
+
+/** Surface the main window: restore if minimized, show if hidden, focus. */
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  return true;
 }
 
 /** Read the clipboard image and return a data URL, or null if empty. */
@@ -1008,6 +1023,75 @@ ipcMain.handle('create-project', async (_, data) => {
   rules.invalidateCache();
   notifyMainWindow('projects-changed');
   return project;
+});
+
+// ── Workspace Auto-Register Proposal ──
+// MCP servers call POST /api/workspace/propose when a workspace doesn't match
+// any existing project. We surface a non-blocking toast in the viewer asking
+// the user to register it, or remember it as ignored.
+
+let _pendingProposal = null;
+
+async function getIgnoredWorkspacePaths() {
+  const stored = await db.getSettings('ignored_workspace_paths');
+  return Array.isArray(stored?.paths) ? stored.paths : [];
+}
+
+async function isWorkspaceIgnored(repoPath) {
+  const norm = normalizeRepoPath(repoPath).toLowerCase();
+  const ignored = await getIgnoredWorkspacePaths();
+  return ignored.some(p => p.toLowerCase() === norm);
+}
+
+async function proposeWorkspace({ root, name }) {
+  if (!root) return { proposed: false, reason: 'missing root' };
+  const repoPath = normalizeRepoPath(root);
+  const projects = await db.getProjects();
+  const norm = p => (p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const existing = projects.find(p => p.repo_path && norm(p.repo_path) === norm(repoPath));
+  if (existing) return { proposed: false, matched: true, project: existing };
+
+  if (await isWorkspaceIgnored(repoPath)) return { proposed: false, ignored: true };
+
+  const proposalName = name || repoPath.split(/[\\/]/).filter(Boolean).pop() || 'Untitled';
+  _pendingProposal = { root: repoPath, name: proposalName, ts: Date.now() };
+  showMainWindow();
+  notifyMainWindow('workspace-proposed', _pendingProposal);
+  return { proposed: true, root: repoPath, name: proposalName };
+}
+
+ipcMain.handle('propose-workspace', (_, data) => proposeWorkspace(data || {}));
+
+ipcMain.handle('get-pending-workspace-proposal', () => _pendingProposal);
+
+ipcMain.handle('register-workspace', async (_, data) => {
+  const repoPath = normalizeRepoPath(data?.root || '');
+  if (!repoPath) return null;
+  const name = data?.name || repoPath.split(/[\\/]/).filter(Boolean).pop() || 'Untitled';
+  const project = await db.createProject({ name, repo_path: repoPath });
+  rules.invalidateCache();
+  notifyMainWindow('projects-changed');
+  await addAuditEntry('workspace.register', { name, repo_path: repoPath });
+  if (_pendingProposal && normalizeRepoPath(_pendingProposal.root) === repoPath) _pendingProposal = null;
+  return project;
+});
+
+ipcMain.handle('ignore-workspace', async (_, data) => {
+  const repoPath = normalizeRepoPath(data?.root || '');
+  if (!repoPath) return false;
+  const ignored = await getIgnoredWorkspacePaths();
+  const norm = repoPath.toLowerCase();
+  if (!ignored.some(p => p.toLowerCase() === norm)) {
+    ignored.push(repoPath);
+    await db.saveSetting('ignored_workspace_paths', { paths: ignored });
+  }
+  if (_pendingProposal && normalizeRepoPath(_pendingProposal.root).toLowerCase() === norm) _pendingProposal = null;
+  return true;
+});
+
+ipcMain.handle('dismiss-workspace-proposal', () => {
+  _pendingProposal = null;
+  return true;
 });
 
 ipcMain.handle('update-project', async (_, id, data) => {
@@ -1857,7 +1941,7 @@ async function launchMainApp() {
 
   // Start local HTTP API for MCP server / external tool access
   const { startApiServer } = require('./api-server');
-  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry, notifyMainWindow });
+  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry, notifyMainWindow, proposeWorkspace, showMainWindow });
 
   // Auto-purge trash items older than 30 days
   db.purgeTrash(30).then((n) => {

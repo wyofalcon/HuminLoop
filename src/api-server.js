@@ -78,7 +78,7 @@ const HEARTBEAT_CHECK_INTERVAL = 15_000;
 
 function startApiServer(deps) {
   const { db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry } = deps;
-  const { notifyMainWindow } = deps;
+  const { notifyMainWindow, proposeWorkspace, showMainWindow } = deps;
 
   const server = http.createServer(async (req, res) => {
     // CORS headers for local dev tools
@@ -274,6 +274,20 @@ function startApiServer(deps) {
         await db.deleteProject(parseInt(m.params.id, 10));
         rules.invalidateCache();
         return json(res, { success: true });
+      }
+
+      // ── Workspace Auto-Register Proposal ──
+
+      if (method === 'POST' && pathname === '/api/workspace/propose') {
+        if (!proposeWorkspace) return error(res, 'Workspace proposals not available', 503);
+        const body = await parseBody(req);
+        const result = await proposeWorkspace({ root: body.root, name: body.name });
+        return json(res, result);
+      }
+
+      if (method === 'POST' && pathname === '/api/window/show') {
+        const ok = showMainWindow ? showMainWindow() : false;
+        return json(res, { shown: !!ok });
       }
 
       // ── IDE Heartbeat ──

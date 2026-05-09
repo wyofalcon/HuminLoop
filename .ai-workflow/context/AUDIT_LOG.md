@@ -148,3 +148,93 @@
 3. Consider extracting `saveClipWithRules()` helper if new send-to-ide endpoint needs to save clips, but may defer to future pass if not immediately needed
 
 No blocking issues; no dead code conflicts; no orphaned imports to address.
+
+## 2026-05-08 — Workspace Register Toast + VS Code Extension
+
+**Existing Toast/Notification Patterns:**
+- Simple non-blocking toast already implemented in `renderer/index.js` (lines 160–170): `showToast(msg)` creates/reuses `#huminloop-toast` div, adds `.show` class, auto-hides after 2.5s
+- CSS styling in `renderer/index.css` (lines 1599–1622): positioned bottom-right, fade in/out transition
+- Toast is currently used for "Prompt copied to clipboard" event only
+- **No modal or confirmation-dialog pattern exists** — project creation uses modeless overlay dialogs (dialog.classList.toggle) with inline buttons
+- **Recommendation:** Extend existing `showToast()` to support multi-button layouts (Register/Not now/Don't ask), or create a simple non-blocking banner component alongside toast if a richer UI is needed
+
+**Existing Project Creation Logic:**
+- Single unified flow: `createProject()` IPC handler (main.js:1005–1011) → `db.createProject(data)` → `rules.invalidateCache()` → `notifyMainWindow('projects-changed')`
+- Same flow used by: renderer "Add project" button (renderer/index.js:1576) + HTTP API `POST /api/projects` (api-server.js:251–257)
+- Both normalize `repo_path` via `normalizeRepoPath()` function (deduped in api-server.js, also in main.js)
+- **No drag-and-drop, import, or proposal flow exists yet**
+- **Recommendation:** Route `POST /api/workspace/propose` through the same creation pipeline — normalize path, call `db.createProject()`, trigger rules/notify
+
+**Settings Array Storage Patterns:**
+- Arrays stored in DB settings as objects with wrapper keys: `{ entries: [...] }` for `audit_log` (main.js:1447–1449), `{ enabled: [], custom: [...] }` for `prompt_blocks` (main.js:1406)
+- Retrieval: `await db.getSettings('audit_log')` returns the object, then `.entries` accessed
+- **Recommendation:** `ignored_workspace_paths` should follow pattern: `await db.saveSetting('ignored_workspace_paths', { paths: [...] })` for consistency
+
+**Dead Code & Redundancy:**
+- No dead code identified in files that will touch new feature (api-server.js, main.js, mcp-server/index.js, renderer/index.js)
+- Image load-and-compress pattern duplicated in 6+ places (flagged in 2026-04-06 audit) but unrelated to this feature
+- MCP `git()` function duplicated in mcp-server (flagged in 2026-04-23 audit) but unrelated
+
+**IPC Handler Patterns:**
+- Dominant pattern: `ipcMain.handle` for request/response (all create/update/get operations use this)
+- Minor pattern: `ipcMain.on` for fire-and-forget window controls (close, minimize, etc.)
+- **New `workspace-proposed` event:** use `notifyMainWindow('workspace-proposed', { root, name })` to push to renderer (matches pattern of `clips-changed`, `projects-changed`)
+- **New IPC handler** (`propose-workspace`) should use `ipcMain.handle` for consistency
+
+**MCP Server Session State:**
+- Existing pattern: `_cachedProject` (module-level variable, undefined until first match, cached for session lifetime) at mcp-server/index.js:64–71
+- `matchProject()` caches result after first call, no debounce needed (called per tool invocation, lightweight lookup)
+- **Recommendation:** For propose-once-per-session logic, add similar pattern: `let _proposedPaths = new Set(); if (_proposedPaths.has(PROJECT_ROOT)) return;` before calling propose endpoint
+
+**API/IPC Handler Consistency:**
+- All POST operations that create state have mirrors in both api-server.js and main.js (projects, clips, categories, settings)
+- Pattern: main.js handler → db call → invalidateCache/notifyMainWindow; api-server.js endpoint → same db call → same cache/notify
+- **New endpoints must follow this:** both `POST /api/workspace/propose` (api-server.js) and `propose-workspace` (main.js) should call same `db.createProject()` path after deduplication check
+
+**Recommendations:**
+
+1. **Extend existing toast:** modify `showToast()` signature to accept optional action buttons, or create sibling `showActionToast(msg, actions)` using same #huminloop-toast element
+2. **Reuse project creation:** `POST /api/workspace/propose` → `normalizeRepoPath()` + validate → `db.createProject()` (no new logic)
+3. **Settings storage:** `ignored_workspace_paths` as `{ paths: [...] }` wrapped object; retrieve with `settings.ignored_workspace_paths?.paths || []`
+4. **IPC naming:** use `propose-workspace` handler (not `workspace-propose`) to match verb-noun convention of other handlers (e.g., `create-project`)
+5. **Renderer listener:** add `window.quickclip.onWorkspaceProposed((root, name) => ...)` in preload.js; render toast in renderer
+6. **MCP debounce:** add module-level `let _proposedThisSession = new Set()` at mcp-server top, check before calling propose endpoint once per PROJECT_ROOT
+
+No blocking issues. Feature can reuse existing project creation, settings storage, and toast infrastructure.
+
+## 2026-05-08 — Deploy/Update Script
+
+**Existing Launch/Restart/Deploy Scripts:**
+- `scripts/launch.js` (21 lines) — Node.js wrapper that unsets `ELECTRON_RUN_AS_NODE` (injected by VS Code/Claude Code) and spawns Electron with optional `--dev` flag setting `HUMINLOOP_DEV=1`
+- No existing bash deploy/restart script found in `/scripts/`, `/workflow/`, or `/.ai-workflow/`
+- Closest workflow health check: `.ai-workflow/scripts/ensure-workflow.sh` validates installed deps (Node, Python, Docker, inotifywait, tmux), but does not kill/relaunch the app
+
+**OS Detection Patterns:**
+- Codebase uses `process.platform` (Node.js convention): `window-info.js` checks `process.platform === 'win32'` and `process.platform === 'linux'`; `main.js` uses same pattern for Windows-specific startup logic
+- Workflow scripts use `uname -s` (POSIX/bash standard): `workflow/scripts/` (audit-watch.sh, builder-status.sh, post-commit-audit.sh) all check `uname -s` for Linux vs macOS branching
+- New deploy.sh should follow bash convention: `uname -s` for Linux/macOS detection, `[[ "$OSTYPE" == *"msys"* ]]` for Windows/Git Bash
+
+**Process Kill Patterns:**
+- No existing Electron process killing found in scripts or hooks
+- `main.js` has `app.quit()` handlers (lines 170, 657, 1903) but these are graceful exits
+- New script will use `pkill -f "electron|node.*launch.js"` (portable across bash/WSL/Git Bash)
+
+**package.json script naming:**
+- Current entries: `start`, `dev`, `build`, `build:win`, `build:linux`, `build:mac`, `pack`, `postinstall`
+- `deploy` is clean — no clash; sits logically between `dev` and `build:*` commands
+
+**Native Dependency / First-Run Install Patterns:**
+- README.md documents platform-specific build tools under "Platform-specific build tools" (Windows/Linux/macOS); no script currently validates these
+- `better-sqlite3` failures documented in README; app shows fallback error (lines 1902-1904 main.js)
+- `.ai-workflow/scripts/ensure-workflow.sh` validates Node.js, Python, Docker, inotify-tools, tmux — but not C++ build tools
+
+**Dead/Duplicated Launchers:**
+- No duplicate or dead launch scripts identified; skip `renderer/lite-index.*` (separate cleanup tracked in 2026-04-09 audit)
+
+**Recommendations:**
+1. Reuse `scripts/launch.js` via `npm run dev` — do not re-implement electron spawning
+2. Use bash `uname -s` for OS detection (match existing workflow script convention)
+3. Add pre-install checks for platform-specific build tools (Visual Studio Build Tools, `build-essential`, Xcode CLI), matching README guidance
+4. Single `pkill -f "electron|node.*launch\.js"` command for process killing
+5. Extend `.ai-workflow/scripts/ensure-workflow.sh` to include C++ build tool checks in future
+6. Keep npm script minimal: `"deploy": "bash scripts/deploy.sh"`

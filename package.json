@@ -2,12 +2,16 @@
   "name": "huminloop",
   "version": "2.0.0",
   "description": "HuminLoop — ADHD-friendly knowledge capture. Screenshot, note, done. AI handles the rest.",
-  "author": "wyofalcon@gmail.com",
+  "author": {
+    "name": "wyofalcon",
+    "email": "wyofalcon@gmail.com"
+  },
   "license": "MIT",
   "main": "src/main.js",
   "scripts": {
     "start": "node scripts/launch.js",
     "dev": "node scripts/launch.js --dev",
+    "deploy": "bash scripts/deploy.sh",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",

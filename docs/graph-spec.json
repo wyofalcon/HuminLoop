@@ -1,0 +1,77 @@
+{
+  "_generator": {
+    "name": "daemonstrate",
+    "version": "0.1.0",
+    "url": "https://github.com/wyofalcon/daemonstrate",
+    "generatedAt": "2026-05-10T05:21:34Z"
+  },
+  "title": "HuminLoop",
+  "subtitle": "Keeping humans in the loop — AI-powered knowledge capture for developers who build with AI",
+  "pitch": {
+    "problem": "Developers using AI coding tools lose context every time a new bug catches their eye. Switching apps to retype what they just saw burns the focus they had — especially brutal for ADHD brains.",
+    "plain_problem": "When you spot a bug while coding with AI, you have to stop, switch apps, and retype what you saw. That breaks your focus every single time.",
+    "stages": [
+      {
+        "label": "Screenshot or annotate",
+        "plain_label": "See an issue, mark it",
+        "detail": "Clipboard watcher polls 1s for new images.\nOr draw red/green/pink on screen with the toolbar overlay.",
+        "plain_detail": "HuminLoop notices any screenshot you take.\nOr you scribble colors on the screen to mark what's wrong."
+      },
+      {
+        "label": "Capture window context",
+        "plain_label": "App grabs the context",
+        "detail": "Active window title, process, and repo path captured automatically (Win32 / xdotool / gdbus).",
+        "plain_detail": "It also remembers what app and file you were looking at when you took the shot."
+      },
+      {
+        "label": "Rules + Gemini sort",
+        "plain_label": "AI sorts and tags it",
+        "detail": "7-strategy rule chain runs instantly.\nGemini 2.5 Flash enriches in the background — summary, tags, project match.",
+        "plain_detail": "Sorts your note by project, adds tags, and writes a fix-it summary — without you doing anything."
+      },
+      {
+        "label": "Generate coding prompt",
+        "plain_label": "Writes the AI prompt for you",
+        "detail": "Annotation colors decoded (red=remove, green=add, pink=ref).\nPrompt enriched with SESSION.md + AUDIT_LOG context.",
+        "plain_detail": "Turns your scribble plus a one-line note into a ready-to-paste instruction for an AI coder."
+      },
+      {
+        "label": "Send to IDE via MCP",
+        "plain_label": "Hands it to your AI tool",
+        "detail": "Stages IDE_PROMPT.md to .ai-workflow/.\nMCP server delivers one-shot to Claude Code or Gemini CLI.",
+        "plain_detail": "Your AI coding tool picks it up and starts fixing — you never broke focus."
+      }
+    ],
+    "audiences": [
+      {
+        "label": "For Recruiters & Stakeholders",
+        "headline": "Shipped, cross-platform, opinionated",
+        "detail": "An ADHD-friendly desktop app shipping NSIS / AppImage / deb / dmg installers from a single repo. Vanilla JS renderer. Native JWT for Vertex AI — no SDK dependencies. Multi-agent dev workflow baked in.",
+        "plain_detail": "A working app for Windows, Linux, and Mac, built solo by one developer. The installers are already on GitHub.",
+        "quote": "Wait, this guy actually shipped this?",
+        "plain_quote": "Wait, one person built this whole thing?"
+      },
+      {
+        "label": "For Engineers & Collaborators",
+        "headline": "Bridge between screen and AI",
+        "detail": "Electron 33, dual-DB (Postgres or SQLite auto-fallback), Gemini 2.5 Flash, and an MCP server with 19 tools that lets any AI IDE talk to your clip database. Send-to-IDE uses a one-shot file bridge — staged and consumed atomically.",
+        "plain_detail": "Built on Electron with a database that auto-picks Postgres or SQLite. Talks to Gemini for AI. Includes a server that hooks into Claude Code or other AI editors.",
+        "quote": "I want to fork this and wire it into Claude Code.",
+        "plain_quote": "I want to copy this and connect it to my AI tools."
+      },
+      {
+        "label": "For Anyone Else",
+        "plain_label": "For Anyone Else",
+        "headline": "Like a sticky note, but smarter",
+        "plain_headline": "Like a sticky note, but smarter",
+        "detail": "You see something that needs fixing. You snip a screenshot, jot what's wrong, and the app organizes it for you. If you have an AI helper, it writes the instruction so you can act on it later.",
+        "plain_detail": "You take a screenshot, write a quick note, and the app sorts it. If you use an AI helper, it writes the fix-it message for you.",
+        "quote": "It's Pinterest for things I want to fix later.",
+        "plain_quote": "It's Pinterest for things I want to fix later."
+      }
+    ],
+    "bet": "Knowledge capture is the missing layer between AI coding tools and a developer's flow state. Every screenshot is a bug report waiting to be acted on — HuminLoop closes the loop in seconds, not minutes.",
+    "plain_bet": "AI tools can write code fast — but you still have to tell them what to fix. HuminLoop makes that handoff take seconds, so you don't lose your train of thought."
+  },
+  "scopes": []
+}

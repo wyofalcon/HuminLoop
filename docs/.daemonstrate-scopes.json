@@ -1,0 +1,347 @@
+{
+  "_generator": {
+    "name": "daemonstrate",
+    "version": "0.1.0",
+    "url": "https://github.com/wyofalcon/daemonstrate",
+    "generatedAt": "2026-05-10T05:21:34Z"
+  },
+  "version": 2,
+  "lastSha": "a61c4ca46ad309af5702191a41290ad595b1ccb5",
+  "identifiedAt": "2026-05-10T05:21:34Z",
+  "techStack": [
+    "Electron 33",
+    "Node.js",
+    "Vanilla JS / HTML",
+    "PostgreSQL 16",
+    "SQLite (better-sqlite3)",
+    "Gemini 2.5 Flash",
+    "Vertex AI / Google AI API key",
+    "@modelcontextprotocol/sdk 1.12",
+    "Docker Compose",
+    "electron-builder (NSIS / AppImage / deb / dmg)"
+  ],
+  "lastStructure": null,
+  "scopes": [
+    {
+      "id": "renderer",
+      "display_name": "Renderer (UI)",
+      "plain_display_name": "The app's screens",
+      "kind": "layer",
+      "accent": "#89B4FA",
+      "paths": ["renderer/**/*"],
+      "tech_badges": ["HTML", "Vanilla JS", "Electron Renderer"],
+      "capabilities": [
+        "Tabbed notes viewer & search",
+        "Full & focused capture popups",
+        "Annotation toolbar & draw overlay",
+        "Per-project workflow tabs",
+        "First-run setup wizard"
+      ],
+      "key_nodes": [
+        {"id": "re-index", "label": "Notes Viewer", "file_path": "renderer/index.html", "detail": "Tabbed: Notes/Projects/Workflow/Settings — workflow scoped per project"},
+        {"id": "re-capture", "label": "Capture Popup", "file_path": "renderer/capture.html", "detail": "Screenshot + note + tags"},
+        {"id": "re-focused", "label": "Focused Capture", "file_path": "renderer/focused-capture.html", "detail": "Note + Save & Generate Prompt"},
+        {"id": "re-setup", "label": "Setup Wizard", "file_path": "renderer/setup.html", "detail": "First-run DB + AI config"},
+        {"id": "re-toolbar", "label": "Annotation Toolbar", "file_path": "renderer/toolbar.html", "detail": "Floating: colors + text + capture"},
+        {"id": "re-overlay", "label": "Draw Overlay", "file_path": "renderer/overlay.html", "detail": "Fullscreen transparent canvas"}
+      ],
+      "internal_edges": [
+        {"from": "re-index", "to": "re-capture", "label": "open on hotkey"},
+        {"from": "re-toolbar", "to": "re-overlay", "label": "color/text relay"}
+      ],
+      "external_edges": [
+        {"from": "re-index", "to_layer": "main-process", "to_label_hint": "IPC handlers", "label": "ipcRenderer.invoke (projectId-scoped)"}
+      ],
+      "diagramType": null,
+      "diagramTypeReason": null,
+      "overlay": null,
+      "overlayReason": null
+    },
+    {
+      "id": "main-process",
+      "display_name": "Main Process",
+      "plain_display_name": "The app's brain",
+      "kind": "layer",
+      "accent": "#A6E3A1",
+      "paths": ["src/main.js", "src/preload.js", "src/window-info.js", "src/images.js", "src/workflow-context.js"],
+      "tech_badges": ["Electron 33", "Node.js"],
+      "capabilities": [
+        "Tray menu with mode switching",
+        "Global hotkey (Ctrl+Shift+Q)",
+        "Clipboard polling for screenshots",
+        "Per-project workflow IPC routing",
+        "Background AI categorization"
+      ],
+      "key_nodes": [
+        {"id": "mp-main", "label": "main.js", "file_path": "src/main.js", "detail": "Orchestrator + lifecycle"},
+        {"id": "mp-preload", "label": "preload.js", "file_path": "src/preload.js", "detail": "IPC bridge (~50 methods, projectId-aware)"},
+        {"id": "mp-tray", "label": "Tray Menu", "file_path": "src/main.js", "detail": "Mode switch, settings, quit"},
+        {"id": "mp-clipboard", "label": "Clipboard Watcher", "file_path": "src/main.js", "detail": "1s poll, hash-based detection"},
+        {"id": "mp-hotkey", "label": "Global Hotkey", "file_path": "src/main.js", "detail": "Ctrl+Shift+Q register/unregister"},
+        {"id": "mp-wininfo", "label": "Window Capture", "file_path": "src/window-info.js", "detail": "Active window metadata"},
+        {"id": "mp-images", "label": "Image Storage", "file_path": "src/images.js", "detail": "Disk + AI compression"},
+        {"id": "mp-handlers", "label": "IPC Handlers", "file_path": "src/main.js", "detail": "Clips/projects/AI/settings/workflow"},
+        {"id": "mp-categorize", "label": "Auto Categorize", "file_path": "src/main.js", "detail": "Rules + AI async"},
+        {"id": "mp-workflow", "label": "Workflow Context", "file_path": "src/workflow-context.js", "detail": "Per-project SESSION/AUDIT/RELAY/PROMPT readers + writers"}
+      ],
+      "internal_edges": [
+        {"from": "mp-main", "to": "mp-handlers", "label": "registers"},
+        {"from": "mp-main", "to": "mp-clipboard", "label": "starts watcher"},
+        {"from": "mp-clipboard", "to": "mp-handlers", "label": "opens capture"},
+        {"from": "mp-handlers", "to": "mp-categorize", "label": "on save"},
+        {"from": "mp-handlers", "to": "mp-workflow", "label": "routes by project repo_path"}
+      ],
+      "external_edges": [
+        {"from": "mp-handlers", "to_layer": "data", "to_label_hint": "db.js", "label": "queries"},
+        {"from": "mp-categorize", "to_layer": "ai-rules", "to_label_hint": "ai.js", "label": "calls"},
+        {"from": "mp-handlers", "to_layer": "renderer", "to_label_hint": "Notes Viewer", "label": "webContents.send"},
+        {"from": "mp-handlers", "to_layer": "http-api", "to_label_hint": "api-server.js", "label": "starts on init"}
+      ],
+      "diagramType": null,
+      "diagramTypeReason": null,
+      "overlay": null,
+      "overlayReason": null
+    },
+    {
+      "id": "data",
+      "display_name": "Data Layer",
+      "plain_display_name": "Where notes live",
+      "kind": "layer",
+      "accent": "#F9E2AF",
+      "paths": ["src/db.js", "src/db-pg.js", "src/db-sqlite.js", "src/images.js", "docker/init.sql"],
+      "tech_badges": ["PostgreSQL 16", "SQLite", "Disk Images"],
+      "capabilities": [
+        "Auto pg/sqlite fallback",
+        "Soft-delete with restore",
+        "Disk-backed images",
+        "Multi-IDE session coordination",
+        "WAL mode (sqlite)"
+      ],
+      "key_nodes": [
+        {"id": "da-switcher", "label": "db.js", "file_path": "src/db.js", "detail": "Backend switcher"},
+        {"id": "da-pg", "label": "db-pg.js", "file_path": "src/db-pg.js", "detail": "PostgreSQL driver"},
+        {"id": "da-sqlite", "label": "db-sqlite.js", "file_path": "src/db-sqlite.js", "detail": "better-sqlite3 (WAL)"},
+        {"id": "da-images", "label": "images.js", "file_path": "src/images.js", "detail": "Disk image storage"},
+        {"id": "da-init", "label": "init.sql", "file_path": "docker/init.sql", "detail": "PostgreSQL schema"},
+        {"id": "da-clips", "label": "clips table", "file_path": "docker/init.sql", "detail": "Notes (image + comment)"},
+        {"id": "da-projects", "label": "projects table", "file_path": "docker/init.sql", "detail": "+ active_session_id, last_heartbeat_at for IDE ownership"},
+        {"id": "da-categories", "label": "categories table", "file_path": "docker/init.sql"}
+      ],
+      "internal_edges": [
+        {"from": "da-switcher", "to": "da-pg", "label": "delegates"},
+        {"from": "da-switcher", "to": "da-sqlite", "label": "fallback"},
+        {"from": "da-clips", "to": "da-projects", "label": "FK"},
+        {"from": "da-clips", "to": "da-categories", "label": "FK"}
+      ],
+      "external_edges": [],
+      "diagramType": null,
+      "diagramTypeReason": null,
+      "overlay": null,
+      "overlayReason": null
+    },
+    {
+      "id": "ai-rules",
+      "display_name": "AI & Rules",
+      "plain_display_name": "The smart sorting brain",
+      "kind": "layer",
+      "accent": "#F38BA8",
+      "paths": ["src/ai.js", "src/rules.js"],
+      "tech_badges": ["Gemini 2.5 Flash", "Vertex / API key", "Native JWT"],
+      "capabilities": [
+        "AI summary + tags",
+        "Coding prompt generation",
+        "Semantic clip search",
+        "7-strategy rule chain",
+        "5-min in-memory cache"
+      ],
+      "key_nodes": [
+        {"id": "ai-module", "label": "ai.js", "file_path": "src/ai.js", "detail": "Gemini 2.5 Flash gateway"},
+        {"id": "ai-categorize", "label": "categorize()", "file_path": "src/ai.js", "detail": "JSON enrichment"},
+        {"id": "ai-focused", "label": "generateFocusedPrompt()", "file_path": "src/ai.js", "detail": "Coding prompt from annotations"},
+        {"id": "ai-search", "label": "search()", "file_path": "src/ai.js", "detail": "Semantic clip search"},
+        {"id": "ai-jwt", "label": "Vertex JWT", "file_path": "src/ai.js", "detail": "Native, no SDK"},
+        {"id": "ai-rules", "label": "rules.js", "file_path": "src/rules.js", "detail": "7-strategy chain"},
+        {"id": "ai-rule-repo", "label": "Repo path match", "file_path": "src/rules.js"},
+        {"id": "ai-rule-window", "label": "Window rules", "file_path": "src/rules.js"},
+        {"id": "ai-rule-keywords", "label": "Keyword match", "file_path": "src/rules.js"}
+      ],
+      "internal_edges": [
+        {"from": "ai-rules", "to": "ai-rule-repo", "label": "step 1"},
+        {"from": "ai-rules", "to": "ai-rule-window", "label": "step 2"},
+        {"from": "ai-rules", "to": "ai-rule-keywords", "label": "step 3"}
+      ],
+      "external_edges": [
+        {"from": "ai-rules", "to_layer": "data", "to_label_hint": "db.js", "label": "5m cached loads"}
+      ],
+      "diagramType": null,
+      "diagramTypeReason": null,
+      "overlay": null,
+      "overlayReason": null
+    },
+    {
+      "id": "http-api",
+      "display_name": "HTTP API",
+      "plain_display_name": "The local web service",
+      "kind": "layer",
+      "accent": "#B4BEFE",
+      "paths": ["src/api-server.js"],
+      "tech_badges": ["Node http", "REST", "localhost:7277"],
+      "capabilities": [
+        "External tool access",
+        "Mirror of IPC handlers",
+        "Send-to-IDE staging",
+        "Per-project workflow routes",
+        "Multi-IDE heartbeat with 409 ownership"
+      ],
+      "key_nodes": [
+        {"id": "ap-server", "label": "api-server.js", "file_path": "src/api-server.js", "detail": "Custom router :7277"},
+        {"id": "ap-clips", "label": "/api/clips", "file_path": "src/api-server.js", "detail": "GET/POST"},
+        {"id": "ap-clip-detail", "label": "/api/clips/:id", "file_path": "src/api-server.js", "detail": "GET/PATCH/DELETE"},
+        {"id": "ap-projects", "label": "/api/projects", "file_path": "src/api-server.js"},
+        {"id": "ap-heartbeat", "label": "/api/projects/:id/heartbeat", "file_path": "src/api-server.js", "detail": "IDE session claim — 409 if owned"},
+        {"id": "ap-workspace-propose", "label": "/api/workspace/propose", "file_path": "src/api-server.js", "detail": "MCP-side workspace registration"},
+        {"id": "ap-ai-search", "label": "/api/ai/search", "file_path": "src/api-server.js"},
+        {"id": "ap-send-ide", "label": "/api/clips/:id/send-to-ide", "file_path": "src/api-server.js", "detail": "Stages IDE_PROMPT.md"},
+        {"id": "ap-workflow", "label": "/api/workflow/*", "file_path": "src/api-server.js", "detail": "status/prompts/audits — scoped by projectId"}
+      ],
+      "internal_edges": [
+        {"from": "ap-server", "to": "ap-clips", "label": "routes"},
+        {"from": "ap-server", "to": "ap-send-ide", "label": "routes"},
+        {"from": "ap-server", "to": "ap-heartbeat", "label": "routes"},
+        {"from": "ap-server", "to": "ap-workflow", "label": "routes"}
+      ],
+      "external_edges": [
+        {"from": "ap-clips", "to_layer": "data", "to_label_hint": "db.js", "label": "queries"},
+        {"from": "ap-ai-search", "to_layer": "ai-rules", "to_label_hint": "ai.js", "label": "calls"},
+        {"from": "ap-send-ide", "to_layer": "workflow-system", "to_label_hint": ".ai-workflow", "label": "writes IDE_PROMPT.md"},
+        {"from": "ap-workflow", "to_layer": "main-process", "to_label_hint": "workflow-context.js", "label": "via repo_path"},
+        {"from": "ap-heartbeat", "to_layer": "data", "to_label_hint": "projects table", "label": "updates session_id"}
+      ],
+      "diagramType": null,
+      "diagramTypeReason": null,
+      "overlay": null,
+      "overlayReason": null
+    },
+    {
+      "id": "mcp-server",
+      "display_name": "MCP Server",
+      "plain_display_name": "The IDE bridge",
+      "kind": "layer",
+      "accent": "#FAB387",
+      "paths": ["mcp-server/**/*"],
+      "tech_badges": ["@modelcontextprotocol/sdk 1.12", "stdio transport"],
+      "capabilities": [
+        "19 MCP tools",
+        "IDE agent bridge",
+        "WSL path normalization",
+        "Multi-IDE collision detection",
+        "One-shot prompt delivery"
+      ],
+      "key_nodes": [
+        {"id": "mc-server", "label": "MCP Server", "file_path": "mcp-server/index.js", "detail": "stdio entrypoint"},
+        {"id": "mc-clip-list", "label": "clip_list", "file_path": "mcp-server/index.js"},
+        {"id": "mc-clip-search", "label": "clip_search", "file_path": "mcp-server/index.js"},
+        {"id": "mc-project-match", "label": "project_match", "file_path": "mcp-server/index.js", "detail": "normalizePath() handles WSL UNC + .code-workspace"},
+        {"id": "mc-pending", "label": "get_pending_prompt", "file_path": "mcp-server/index.js", "detail": "One-shot delivery"},
+        {"id": "mc-session", "label": "session_context", "file_path": "mcp-server/index.js", "detail": "Local SESSION.md read"},
+        {"id": "mc-git", "label": "git_status", "file_path": "mcp-server/index.js", "detail": "Local child_process"},
+        {"id": "mc-heartbeat", "label": "Heartbeat + Session ID", "file_path": "mcp-server/index.js", "detail": "Stable per-process ID; suppress on 409"},
+        {"id": "mc-host-detect", "label": "Container Routing", "file_path": "mcp-server/index.js", "detail": "host.docker.internal"}
+      ],
+      "internal_edges": [
+        {"from": "mc-server", "to": "mc-clip-list", "label": "routes"},
+        {"from": "mc-server", "to": "mc-pending", "label": "routes"},
+        {"from": "mc-server", "to": "mc-heartbeat", "label": "every tool call"}
+      ],
+      "external_edges": [
+        {"from": "mc-clip-list", "to_layer": "http-api", "to_label_hint": "/api/clips", "label": "GET"},
+        {"from": "mc-pending", "to_layer": "workflow-system", "to_label_hint": "IDE_PROMPT.md", "label": "reads + deletes"},
+        {"from": "mc-heartbeat", "to_layer": "http-api", "to_label_hint": "/api/projects/:id/heartbeat", "label": "POST session_id"},
+        {"from": "mc-project-match", "to_layer": "http-api", "to_label_hint": "/api/workspace/propose", "label": "if no match"}
+      ],
+      "diagramType": null,
+      "diagramTypeReason": null,
+      "overlay": null,
+      "overlayReason": null
+    },
+    {
+      "id": "workflow-system",
+      "display_name": "Workflow System",
+      "plain_display_name": "The AI dev workflow",
+      "kind": "layer",
+      "accent": "#94E2D5",
+      "paths": [".ai-workflow/**/*", "workflow/**/*", "src/workflow-context.js"],
+      "tech_badges": ["Git Bash", "Multi-agent", "Per-project state"],
+      "capabilities": [
+        "Multi-agent orchestration",
+        "Per-project workflow state",
+        "Pre-commit AI screening",
+        "Auto commit summaries",
+        "SESSION.md context bridge"
+      ],
+      "key_nodes": [
+        {"id": "wf-instructions", "label": ".ai-workflow/instructions/", "file_path": ".ai-workflow/instructions", "detail": "5 role files"},
+        {"id": "wf-architect", "label": "Architect", "file_path": ".ai-workflow/instructions/ARCHITECT.md", "detail": "Sonnet 4.6 — orchestrates"},
+        {"id": "wf-builder", "label": "Builder", "file_path": ".ai-workflow/instructions/BUILDER.md", "detail": "Opus 4.6 — writes code"},
+        {"id": "wf-reviewer", "label": "Reviewer", "file_path": ".ai-workflow/instructions/REVIEWER.md", "detail": "Gemini 3.1 Pro"},
+        {"id": "wf-screener", "label": "Screener", "file_path": ".ai-workflow/instructions/SCREENER.md", "detail": "Gemini 2.0 Flash"},
+        {"id": "wf-context", "label": ".ai-workflow/context/", "file_path": ".ai-workflow/context", "detail": "SESSION.md, AUDIT_LOG.md, RELAY_MODE, AUDIT_WATCH_MODE, PROMPT_TRACKER.log"},
+        {"id": "wf-scripts", "label": ".ai-workflow/scripts/", "file_path": ".ai-workflow/scripts", "detail": "Git Bash compatible"},
+        {"id": "wf-hook", "label": "prepare-commit-msg hook", "file_path": "workflow/hooks", "detail": "Auto commit summary"},
+        {"id": "wf-context-reader", "label": "workflow-context.js", "file_path": "src/workflow-context.js", "detail": "12 helpers — read/write SESSION+AUDIT+RELAY+PROMPT per repo_path"}
+      ],
+      "internal_edges": [
+        {"from": "wf-architect", "to": "wf-builder", "label": "!msg routes"},
+        {"from": "wf-architect", "to": "wf-reviewer", "label": "diff audit"}
+      ],
+      "external_edges": [
+        {"from": "wf-context-reader", "to_layer": "ai-rules", "to_label_hint": "generateFocusedPrompt", "label": "session context"},
+        {"from": "wf-context-reader", "to_layer": "main-process", "to_label_hint": "IPC Handlers", "label": "per-project state I/O"}
+      ],
+      "diagramType": null,
+      "diagramTypeReason": null,
+      "overlay": null,
+      "overlayReason": null
+    },
+    {
+      "id": "infra",
+      "display_name": "Infra",
+      "plain_display_name": "How the app is shipped",
+      "kind": "layer",
+      "accent": "#CBA6F7",
+      "paths": ["docker-compose.yml", "docker/**/*", "build/**/*", ".github/**/*", "scripts/**/*", ".env.example"],
+      "tech_badges": ["Docker Compose", "electron-builder", "GitHub Actions"],
+      "capabilities": [
+        "Cross-platform installers",
+        "Postgres in Docker",
+        "CI/CD release pipeline",
+        "Native window capture",
+        "Dev process orchestration"
+      ],
+      "key_nodes": [
+        {"id": "in-compose", "label": "docker-compose.yml", "file_path": "docker-compose.yml", "detail": "PostgreSQL 16 :5433"},
+        {"id": "in-builder", "label": "electron-builder", "file_path": "package.json", "detail": "NSIS / AppImage / deb / dmg"},
+        {"id": "in-ci", "label": ".github/workflows/", "file_path": ".github/workflows", "detail": "Multi-OS build matrix"},
+        {"id": "in-launch", "label": "scripts/launch.js", "file_path": "scripts/launch.js", "detail": "Unsets ELECTRON_RUN_AS_NODE"},
+        {"id": "in-getwindow", "label": "get-window.ps1", "file_path": "scripts/get-window.ps1", "detail": "Win32 P/Invoke"},
+        {"id": "in-killall", "label": "kill-all.sh", "file_path": "scripts/kill-all.sh", "detail": "Stop electron/MCP/launcher; --force = SIGKILL"},
+        {"id": "in-deploy", "label": "deploy.sh", "file_path": "scripts/deploy.sh", "detail": "Linux/WSL/macOS/Git Bash dev launcher"},
+        {"id": "in-nsis", "label": "installer.nsh", "file_path": "build/installer.nsh", "detail": "VC++ install"},
+        {"id": "in-env", "label": ".env.example", "file_path": ".env.example", "detail": "Manually loaded (no dotenv)"}
+      ],
+      "internal_edges": [
+        {"from": "in-builder", "to": "in-nsis", "label": "Windows NSIS"},
+        {"from": "in-ci", "to": "in-builder", "label": "runs build:*"},
+        {"from": "in-deploy", "to": "in-launch", "label": "delegates to npm run dev"}
+      ],
+      "external_edges": [
+        {"from": "in-compose", "to_layer": "data", "to_label_hint": "PostgreSQL", "label": "provisions"},
+        {"from": "in-getwindow", "to_layer": "main-process", "to_label_hint": "window-info.js", "label": "spawned"}
+      ],
+      "diagramType": null,
+      "diagramTypeReason": null,
+      "overlay": null,
+      "overlayReason": null
+    }
+  ]
+}

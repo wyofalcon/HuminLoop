@@ -11,8 +11,8 @@
   "scripts": {
     "start": "node scripts/launch.js",
     "dev": "node scripts/launch.js --dev",
-    "kill": "bash scripts/kill-all.sh",
-    "kill:force": "bash scripts/kill-all.sh --force",
+    "kill": "node scripts/kill-all.js",
+    "kill:force": "node scripts/kill-all.js --force",
     "deploy": "bash scripts/deploy.sh",
     "build": "electron-builder",
     "build:win": "electron-builder --win",

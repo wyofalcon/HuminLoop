@@ -1,0 +1,77 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "HuminLoop: Kill all processes",
+      "type": "shell",
+      "command": "npm run kill",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "detail": "Stop every HuminLoop electron / MCP / launcher process before a rebuild."
+    },
+    {
+      "label": "HuminLoop: Kill all (force)",
+      "type": "shell",
+      "command": "npm run kill:force",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "Same as Kill all but skips SIGTERM and goes straight to SIGKILL."
+    },
+    {
+      "label": "HuminLoop: Dev (with DevTools)",
+      "type": "shell",
+      "command": "npm run dev",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "Launch HuminLoop with DevTools auto-open (HUMINLOOP_DEV=1)."
+    },
+    {
+      "label": "HuminLoop: Start",
+      "type": "shell",
+      "command": "npm start",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "Launch HuminLoop normally."
+    },
+    {
+      "label": "HuminLoop: Kill, then Dev",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "HuminLoop: Kill all processes",
+        "HuminLoop: Dev (with DevTools)"
+      ],
+      "problemMatcher": [],
+      "detail": "Clean restart: stop all instances, then launch with DevTools."
+    }
+  ]
+}

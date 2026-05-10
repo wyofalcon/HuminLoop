@@ -106,6 +106,87 @@ function readRelayMode(repoPath) {
   }
 }
 
+function readAuditMode(repoPath) {
+  if (!repoPath) return 'off';
+  const filePath = path.join(repoPath, '.ai-workflow', 'context', 'AUDIT_WATCH_MODE');
+  try {
+    return fs.readFileSync(filePath, 'utf8').trim() || 'off';
+  } catch {
+    return 'off';
+  }
+}
+
+function setRelayMode(repoPath, mode) {
+  if (!repoPath || !mode) return null;
+  const filePath = path.join(repoPath, '.ai-workflow', 'context', 'RELAY_MODE');
+  fs.writeFileSync(filePath, mode, 'utf8');
+  return mode;
+}
+
+function setAuditMode(repoPath, mode) {
+  if (!repoPath || !mode) return null;
+  const filePath = path.join(repoPath, '.ai-workflow', 'context', 'AUDIT_WATCH_MODE');
+  fs.writeFileSync(filePath, mode, 'utf8');
+  return mode;
+}
+
+function readChangelog(repoPath) {
+  if (!repoPath) return null;
+  const filePath = path.join(repoPath, '.ai-workflow', 'context', 'CHANGELOG.md');
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function readAllPrompts(repoPath) {
+  if (!repoPath) return [];
+  const filePath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8').trim();
+    if (!raw) return [];
+    return raw.split('\n').map(line => {
+      const parts = line.split('|');
+      return {
+        id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3],
+        type: parts[4] || 'CRAFTED', parentId: parts[5] || null,
+        files: parts[6] ? parts[6].split(',').filter(Boolean) : [],
+      };
+    }).reverse();
+  } catch {
+    return [];
+  }
+}
+
+function updatePromptTracker(repoPath, promptId, newStatus, files = null) {
+  if (!repoPath || !promptId) return false;
+  const trackerPath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  try {
+    const raw = fs.readFileSync(trackerPath, 'utf8');
+    const lines = raw.split('\n');
+    let touched = false;
+    const newLines = lines.map(line => {
+      if (line.startsWith(promptId + '|')) {
+        const parts = line.split('|');
+        parts[1] = newStatus;
+        if (files) {
+          while (parts.length < 7) parts.push('');
+          parts[6] = Array.isArray(files) ? files.join(',') : files;
+        }
+        touched = true;
+        return parts.join('|');
+      }
+      return line;
+    });
+    if (!touched) return false;
+    fs.writeFileSync(trackerPath, newLines.join('\n'), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Assemble a full workflow context bundle for a clip + project.
  * Used by Bundle & Send (Task 4) to build IDE context payloads.
@@ -177,6 +258,13 @@ function installGitHook(repoPath, templateDir) {
  * @returns {{ success: boolean, reason?: string }}
  */
 function scaffoldWorkflow(repoPath, projectName, apiPort = 7277) {
+  if (!repoPath) return { success: false, reason: 'no_repo_path' };
+  if (!fs.existsSync(repoPath)) return { success: false, reason: 'repo_path_not_found' };
+  try {
+    if (!fs.statSync(repoPath).isDirectory()) return { success: false, reason: 'repo_path_not_directory' };
+  } catch {
+    return { success: false, reason: 'repo_path_inaccessible' };
+  }
   const workflowDir = path.join(repoPath, '.ai-workflow');
   if (fs.existsSync(workflowDir)) {
     return { success: false, reason: 'already_exists' };
@@ -236,4 +324,6 @@ module.exports = {
   readSessionContext, readAuditFindings, hasWorkflow,
   getGitState, getPendingPrompts, readRelayMode, assembleBundle,
   scaffoldWorkflow,
+  readAuditMode, setRelayMode, setAuditMode,
+  readChangelog, readAllPrompts, updatePromptTracker,
 };

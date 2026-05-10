@@ -55,26 +55,7 @@ function deriveScope(clip, project) {
   return 'general';
 }
 
-function updatePromptStatus(repoPath, promptId, newStatus, files = null) {
-  const trackerPath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
-  try {
-    const raw = fs.readFileSync(trackerPath, 'utf8');
-    const lines = raw.split('\n');
-    const newLines = lines.map(line => {
-      if (line.startsWith(promptId + '|')) {
-        const parts = line.split('|');
-        parts[1] = newStatus;
-        if (files) {
-          while (parts.length < 7) parts.push('');
-          parts[6] = Array.isArray(files) ? files.join(',') : files;
-        }
-        return parts.join('|');
-      }
-      return line;
-    });
-    fs.writeFileSync(trackerPath, newLines.join('\n'), 'utf8');
-  } catch {}
-}
+// updatePromptStatus moved to workflow-context.updatePromptTracker
 
 function formatBundle(promptId, clip, bundle, annotationColors) {
   let md = `# HuminLoop Dev Prompt\n## Prompt ID: ${promptId}\n\n`;
@@ -336,6 +317,14 @@ async function createMainWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', htmlFile));
+  // Restore the user's persisted zoom level (clamped to a sane range).
+  mainWindow.webContents.once('did-finish-load', async () => {
+    try {
+      const stored = await db.getSettings('display');
+      const level = Number(stored?.zoom_level);
+      if (Number.isFinite(level)) mainWindow.webContents.setZoomLevel(Math.max(-3, Math.min(3, level)));
+    } catch {}
+  });
   if (process.env.HUMINLOOP_DEV === '1') mainWindow.webContents.openDevTools();
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
@@ -1014,6 +1003,11 @@ function normalizeRepoPath(p) {
   if (!p) return p;
   p = p.replace(/^["']|["']$/g, '').trim(); // strip wrapping quotes
   p = p.replace(/[\\/][^\\/]+\.code-workspace$/i, ''); // strip workspace file
+  // WSL UNC paths from Windows tooling resolve to the same place as the Linux
+  // path. Canonicalize to the Linux form so a Windows-side MCP and a Linux-side
+  // capture both match the same project row.
+  const wslMatch = p.replace(/\\/g, '/').match(/^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+(\/.*)?$/i);
+  if (wslMatch) p = wslMatch[1] || '/';
   return p;
 }
 
@@ -1387,7 +1381,7 @@ ipcMain.handle('queue-as-plan', async (_, clipIds, projectId) => {
 
     appendToPromptTracker(project.repo_path, promptId, desc, 'CRAFTED');
     if (status === 'QUEUED') {
-      updatePromptStatus(project.repo_path, promptId, 'QUEUED');
+      workflowContext.updatePromptTracker(project.repo_path, promptId, 'QUEUED');
     }
 
     await db.updateClip(clipIds[i], { sent_to_ide_at: i === 0 ? new Date().toISOString() : null });
@@ -1444,7 +1438,7 @@ ipcMain.handle('advance-plan', async (_, planId) => {
     fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
   }
 
-  updatePromptStatus(plan.repoPath, task.promptId, 'BUNDLED');
+  workflowContext.updatePromptTracker(plan.repoPath, task.promptId, 'BUNDLED');
   await db.updateClip(task.clipId, { sent_to_ide_at: new Date().toISOString() });
   plan.currentIndex = nextIndex;
 
@@ -1458,7 +1452,7 @@ ipcMain.handle('cancel-plan', async (_, planId) => {
   if (!plan) throw new Error('Plan not found');
 
   for (let i = plan.currentIndex + 1; i < plan.tasks.length; i++) {
-    updatePromptStatus(plan.repoPath, plan.tasks[i].promptId, 'FAILED');
+    workflowContext.updatePromptTracker(plan.repoPath, plan.tasks[i].promptId, 'FAILED');
   }
 
   activePlans.delete(planId);
@@ -1579,65 +1573,64 @@ ipcMain.handle('set-focused-active-project', async (_, projectId) => {
 
 // ── IPC Handlers: Workflow ──
 
-ipcMain.handle('get-workflow-status', async () => {
-  const workflowDir = path.join(__dirname, '..', '.ai-workflow');
-  const contextDir = path.join(workflowDir, 'context');
-  const read = (f) => { try { return fs.readFileSync(path.join(contextDir, f), 'utf8').trim(); } catch { return null; } };
+// Workflow handlers are now per-project. Each accepts a projectId (number) and
+// resolves the project's repo_path. Returns null/empty if the project is missing
+// a repo_path or .ai-workflow/ directory.
+async function resolveProjectRepoPath(projectId) {
+  if (!projectId) return null;
+  const project = await db.getProject(projectId);
+  return project?.repo_path || null;
+}
+
+ipcMain.handle('get-workflow-status', async (_, projectId) => {
+  const repoPath = await resolveProjectRepoPath(projectId);
+  if (!repoPath) return { hasWorkflow: false, relayMode: 'review', auditMode: 'off', session: null };
   return {
-    relayMode: read('RELAY_MODE') || 'review',
-    auditMode: read('AUDIT_WATCH_MODE') || 'off',
-    session: read('SESSION.md'),
-    hasWorkflow: fs.existsSync(workflowDir),
+    relayMode: workflowContext.readRelayMode(repoPath),
+    auditMode: workflowContext.readAuditMode(repoPath),
+    session: workflowContext.readSessionContext(repoPath),
+    hasWorkflow: workflowContext.hasWorkflow(repoPath),
   };
 });
 
-ipcMain.handle('toggle-relay-mode', async () => {
-  const contextDir = path.join(__dirname, '..', '.ai-workflow', 'context');
-  const file = path.join(contextDir, 'RELAY_MODE');
-  let current = 'review';
-  try { current = fs.readFileSync(file, 'utf8').trim(); } catch {}
+ipcMain.handle('toggle-relay-mode', async (_, projectId) => {
+  const repoPath = await resolveProjectRepoPath(projectId);
+  if (!repoPath) throw new Error('Project has no repo_path');
+  const current = workflowContext.readRelayMode(repoPath);
   const next = current === 'auto' ? 'review' : 'auto';
-  fs.writeFileSync(file, next, 'utf8');
-  return next;
+  return workflowContext.setRelayMode(repoPath, next);
 });
 
-ipcMain.handle('toggle-audit-watch', async () => {
-  const contextDir = path.join(__dirname, '..', '.ai-workflow', 'context');
-  const file = path.join(contextDir, 'AUDIT_WATCH_MODE');
-  let current = 'off';
-  try { current = fs.readFileSync(file, 'utf8').trim(); } catch {}
+ipcMain.handle('toggle-audit-watch', async (_, projectId) => {
+  const repoPath = await resolveProjectRepoPath(projectId);
+  if (!repoPath) throw new Error('Project has no repo_path');
+  const current = workflowContext.readAuditMode(repoPath);
   const next = current === 'on' ? 'off' : 'on';
-  fs.writeFileSync(file, next, 'utf8');
-  return next;
+  return workflowContext.setAuditMode(repoPath, next);
 });
 
-ipcMain.handle('get-workflow-changelog', async () => {
-  const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'CHANGELOG.md');
-  try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+ipcMain.handle('get-workflow-changelog', async (_, projectId) => {
+  const repoPath = await resolveProjectRepoPath(projectId);
+  if (!repoPath) return null;
+  return workflowContext.readChangelog(repoPath);
 });
 
-ipcMain.handle('get-workflow-prompts', async () => {
-  const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
-  try {
-    const raw = fs.readFileSync(p, 'utf8').trim();
-    if (!raw) return [];
-    return raw.split('\n').map((line) => {
-      const parts = line.split('|');
-      return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3],
-        type: parts[4] || 'CRAFTED', parentId: parts[5] || null,
-        files: parts[6] ? parts[6].split(',').filter(Boolean) : [] };
-    }).reverse();
-  } catch { return []; }
+ipcMain.handle('get-workflow-prompts', async (_, projectId) => {
+  const repoPath = await resolveProjectRepoPath(projectId);
+  if (!repoPath) return [];
+  return workflowContext.readAllPrompts(repoPath);
 });
 
-ipcMain.handle('get-workflow-audits', async () => {
-  const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'AUDIT_LOG.md');
-  try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+ipcMain.handle('get-workflow-audits', async (_, projectId) => {
+  const repoPath = await resolveProjectRepoPath(projectId);
+  if (!repoPath) return null;
+  return workflowContext.readAuditFindings(repoPath);
 });
 
-ipcMain.handle('init-dev-workflow', async (_, projectId) => {
+async function initWorkflow(projectId) {
   const project = await db.getProject(projectId);
-  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+  if (!project) return { success: false, reason: 'project_not_found' };
+  if (!project.repo_path) return { success: false, reason: 'no_repo_path' };
 
   const apiPort = parseInt(process.env.HUMINLOOP_API_PORT || '7277', 10);
   const result = workflowContext.scaffoldWorkflow(project.repo_path, project.name, apiPort);
@@ -1647,6 +1640,25 @@ ipcMain.handle('init-dev-workflow', async (_, projectId) => {
     notifyMainWindow('projects-changed');
   }
   return result;
+}
+
+ipcMain.handle('init-dev-workflow', async (_, projectId) => {
+  const result = await initWorkflow(projectId);
+  // Preserve original error-throwing semantics for missing repo_path
+  if (!result.success && result.reason === 'no_repo_path') throw new Error('Project has no repo_path');
+  return result;
+});
+
+ipcMain.handle('get-zoom-level', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return 0;
+  return mainWindow.webContents.getZoomLevel();
+});
+
+ipcMain.handle('set-zoom-level', async (_, level) => {
+  const clamped = Math.max(-3, Math.min(3, Number(level) || 0));
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setZoomLevel(clamped);
+  await db.saveSetting('display', { zoom_level: clamped });
+  return clamped;
 });
 
 ipcMain.handle('has-project-workflow', async (_, projectId) => {
@@ -1662,7 +1674,12 @@ ipcMain.on('close-capture', () => {
 });
 
 ipcMain.on('hide-main', () => {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  // Linux tray support is unreliable: vanilla GNOME and WSLg don't render it,
+  // so .hide() looks like a crash. Minimize to the taskbar instead — works on
+  // every desktop. Windows/macOS keep the tuck-to-tray behavior.
+  if (process.platform === 'linux') mainWindow.minimize();
+  else mainWindow.hide();
 });
 
 ipcMain.on('open-capture', async () => {
@@ -1941,7 +1958,7 @@ async function launchMainApp() {
 
   // Start local HTTP API for MCP server / external tool access
   const { startApiServer } = require('./api-server');
-  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry, notifyMainWindow, proposeWorkspace, showMainWindow });
+  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry, notifyMainWindow, proposeWorkspace, showMainWindow, initWorkflow });
 
   // Auto-purge trash items older than 30 days
   db.purgeTrash(30).then((n) => {

@@ -2,7 +2,7 @@
   "mcpServers": {
     "huminloop": {
       "command": "node",
-      "args": ["c:/Users/Wyofa/projects/quickclip/mcp-server/index.js"]
+      "args": ["mcp-server/index.js"]
     }
   }
 }

@@ -64,11 +64,26 @@ function imageContent(base64, mimeType = 'image/png') {
 let _cachedProject = undefined;
 const _proposedThisSession = new Set();
 
+// Canonicalize a path for cross-environment comparison. Handles:
+//   - backslashes → forward slashes
+//   - .code-workspace filename suffix
+//   - trailing slashes
+//   - WSL UNC paths from Windows: \\wsl.localhost\<distro>\... or \\wsl$\<distro>\...
+//     normalize to the underlying Linux path so a Windows-side MCP and a
+//     Linux-side project repo_path resolve to the same canonical form
+function normalizePath(p) {
+  if (!p) return '';
+  let out = p.replace(/\\/g, '/').replace(/\/[^/]+\.code-workspace$/i, '').replace(/\/+$/, '');
+  const wslMatch = out.match(/^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+(\/.*)?$/i);
+  if (wslMatch) out = wslMatch[1] || '/';
+  return out.toLowerCase();
+}
+
 async function matchProject() {
   if (_cachedProject !== undefined) return _cachedProject;
   const projects = await api('GET', '/api/projects');
-  const norm = p => p.replace(/\\/g, '/').replace(/\/[^/]+\.code-workspace$/i, '').replace(/\/+$/, '').toLowerCase();
-  const match = projects.find(p => p.repo_path && norm(p.repo_path) === norm(PROJECT_ROOT));
+  const target = normalizePath(PROJECT_ROOT);
+  const match = projects.find(p => p.repo_path && normalizePath(p.repo_path) === target);
   _cachedProject = match || null;
   if (!match) proposeWorkspaceOnce(PROJECT_ROOT).catch(() => {});
   return _cachedProject;
@@ -97,11 +112,32 @@ function detectAgent() {
 }
 const _agentName = detectAgent();
 
+// Stable per-process session ID. PID + hostname + workspace root collides only
+// across reused PIDs on the same host pointing at the same workspace, which is
+// vanishingly rare. The HuminLoop API uses this to detect when a *different*
+// IDE tries to claim a project that already has an active owner.
+const os = require('os');
+const _sessionId = `${os.hostname()}-${process.pid}-${PROJECT_ROOT.replace(/[^a-z0-9]/gi, '').slice(-16)}`;
+
+let _heartbeatRejected = false;
+
 async function sendHeartbeat() {
+  if (_heartbeatRejected) return;
   try {
     const project = await matchProject();
-    if (project) {
-      await api('POST', `/api/projects/${project.id}/heartbeat`, { ide: _agentName });
+    if (!project) return;
+    const url = `${API_BASE}/api/projects/${project.id}/heartbeat`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ide: _agentName, session_id: _sessionId }),
+    });
+    if (resp.status === 409) {
+      _heartbeatRejected = true;
+      try {
+        const data = await resp.json();
+        process.stderr.write(`[HuminLoop MCP] Project already claimed by another IDE session (${data.owner_ide || 'unknown'}). Heartbeats suppressed.\n`);
+      } catch {}
     }
   } catch { /* heartbeat is best-effort */ }
 }

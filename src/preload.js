@@ -72,18 +72,22 @@ contextBridge.exposeInMainWorld('quickclip', {
   getAuditLog: () => ipcRenderer.invoke('get-audit-log'),
   clearAuditLog: () => ipcRenderer.invoke('clear-audit-log'),
 
-  // Workflow
-  getWorkflowStatus: () => ipcRenderer.invoke('get-workflow-status'),
-  getWorkflowChangelog: () => ipcRenderer.invoke('get-workflow-changelog'),
-  getWorkflowPrompts: () => ipcRenderer.invoke('get-workflow-prompts'),
-  toggleRelayMode: () => ipcRenderer.invoke('toggle-relay-mode'),
-  toggleAuditWatch: () => ipcRenderer.invoke('toggle-audit-watch'),
-  getWorkflowAudits: () => ipcRenderer.invoke('get-workflow-audits'),
+  // Workflow (per-project — pass projectId)
+  getWorkflowStatus: (projectId) => ipcRenderer.invoke('get-workflow-status', projectId),
+  getWorkflowChangelog: (projectId) => ipcRenderer.invoke('get-workflow-changelog', projectId),
+  getWorkflowPrompts: (projectId) => ipcRenderer.invoke('get-workflow-prompts', projectId),
+  toggleRelayMode: (projectId) => ipcRenderer.invoke('toggle-relay-mode', projectId),
+  toggleAuditWatch: (projectId) => ipcRenderer.invoke('toggle-audit-watch', projectId),
+  getWorkflowAudits: (projectId) => ipcRenderer.invoke('get-workflow-audits', projectId),
   initDevWorkflow: (projectId) => ipcRenderer.invoke('init-dev-workflow', projectId),
   hasProjectWorkflow: (projectId) => ipcRenderer.invoke('has-project-workflow', projectId),
 
   // App info
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
+  // Display zoom (1.0 default; each step is +/- 20% per Chromium convention)
+  getZoomLevel: () => ipcRenderer.invoke('get-zoom-level'),
+  setZoomLevel: (level) => ipcRenderer.invoke('set-zoom-level', level),
 
   // Toolbar
   enterDrawMode: (color) => ipcRenderer.invoke('enter-draw-mode', color),
@@ -116,6 +120,7 @@ contextBridge.exposeInMainWorld('quickclip', {
 
   // Workspace auto-register
   onWorkspaceProposed: (cb) => ipcRenderer.on('workspace-proposed', (_, data) => cb(data)),
+  onIdeCollision: (cb) => ipcRenderer.on('ide-collision', (_, data) => cb(data)),
   getPendingWorkspaceProposal: () => ipcRenderer.invoke('get-pending-workspace-proposal'),
   registerWorkspace: (data) => ipcRenderer.invoke('register-workspace', data),
   ignoreWorkspace: (data) => ipcRenderer.invoke('ignore-workspace', data),

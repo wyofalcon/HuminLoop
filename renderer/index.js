@@ -36,12 +36,15 @@ let devPrompts = [];
 let devFilter = 'all'; // 'all' | 'pending' | 'done'
 let devPollInterval = null;
 
-// Workflow tab state
+// Workflow state — loaded for the currently-selected project
 let workflowStatus = null;
 let workflowChangelog = null;
 let workflowPrompts = [];
 let workflowAudits = null;
 let workflowSection = 'status';
+
+// Project detail sub-tab: 'notes' (clips) or 'workflow' (per-project AI dev workflow)
+let projectDetailTab = 'notes';
 
 // ── Init ──
 
@@ -62,9 +65,9 @@ let workflowSection = 'status';
 })();
 
 function applyFocusedMode() {
-  // Hide General Notes and Workflow tabs
+  // Hide General Notes tab (workflow tab no longer exists at top level)
   document.querySelectorAll('.tab').forEach((btn) => {
-    if (btn.dataset.tab === 'general' || btn.dataset.tab === 'workflow') {
+    if (btn.dataset.tab === 'general') {
       btn.style.display = 'none';
     }
   });
@@ -108,7 +111,7 @@ async function loadData() {
     if (isDevMode) {
       const project = projects.find(p => p.id === selectedProjectId);
       ideStatus = await window.quickclip.detectIde(project?.repo_path);
-      devPrompts = await window.quickclip.getWorkflowPrompts();
+      devPrompts = await window.quickclip.getWorkflowPrompts(selectedProjectId);
       window._activePlans = await window.quickclip.getActivePlans();
       startDevPolling();
     } else {
@@ -228,6 +231,19 @@ function showWorkspaceProposal(data) {
 window.quickclip.onWorkspaceProposed((data) => showWorkspaceProposal(data));
 window.quickclip.getPendingWorkspaceProposal().then(p => { if (p) showWorkspaceProposal(p); });
 
+if (window.quickclip.onIdeCollision) {
+  window.quickclip.onIdeCollision((data) => {
+    if (!data) return;
+    const projName = data.project_name || `project ${data.project_id}`;
+    showActionToast({
+      title: 'Another IDE tried to connect',
+      message: `${data.rejected_ide || 'An IDE'} tried to claim "${projName}", but ${data.owner_ide || 'another IDE'} is already connected. Each project allows one IDE at a time.`,
+      sticky: false,
+      actions: [{ label: 'OK', primary: true, onClick: () => {} }],
+    });
+  });
+}
+
 // ── Escaping ──
 
 function esc(s) {
@@ -249,7 +265,9 @@ function escAttr(s) {
 
 function switchTab(tab) {
   // In focused mode, only allow projects, settings, and help tabs
-  if (isFocusedMode && (tab === 'general' || tab === 'workflow')) return;
+  if (isFocusedMode && tab === 'general') return;
+  // Workflow is no longer a top-level tab — redirect to Projects
+  if (tab === 'workflow') tab = 'projects';
   activeTab = tab;
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
@@ -308,9 +326,6 @@ function updateStatusBar() {
     sub.textContent = `${trashClips.length} trashed note${trashClips.length !== 1 ? 's' : ''}`;
   } else if (activeTab === 'help') {
     sub.textContent = 'Help — how to use HuminLoop';
-  } else if (activeTab === 'workflow') {
-    const mode = workflowStatus?.relayMode || '?';
-    sub.textContent = `AI Dev Workflow · relay: ${mode}`;
   } else {
     sub.textContent = 'App settings';
   }
@@ -323,10 +338,12 @@ function updateStatusBar() {
 function renderSidebar() {
   const el = document.getElementById('sidebar');
   if (activeTab === 'general') renderGeneralSidebar(el);
-  else if (activeTab === 'projects') renderProjectsSidebar(el);
+  else if (activeTab === 'projects') {
+    if (selectedProjectId && projectDetailTab === 'workflow') renderWorkflowSidebar(el);
+    else renderProjectsSidebar(el);
+  }
   else if (activeTab === 'settings') renderSettingsSidebar(el);
   else if (activeTab === 'help') renderHelpSidebar(el);
-  else if (activeTab === 'workflow') renderWorkflowSidebar(el);
 }
 
 function renderGeneralSidebar(el) {
@@ -656,6 +673,7 @@ function renderHelpContent(el) {
           <li><strong>Use projects for sprints:</strong> Create a project per feature or bug hunt, then review all notes when you're done</li>
           <li><strong>Thread comments:</strong> Come back to a clip later and add follow-up notes — great for tracking progress on an issue</li>
           <li><strong>Hover anything:</strong> Most buttons and elements have tooltips — hover for 1-2 seconds to see what they do</li>
+          <li><strong>Linux on GNOME:</strong> If you don't see a tray icon, install <code>gnome-shell-extension-appindicator</code> and enable it. WSLg has no tray support — use the taskbar entry or <kbd>Ctrl+Shift+Q</kbd> instead.</li>
         </ul>
       </div>
     </div>
@@ -666,16 +684,46 @@ function renderHelpContent(el) {
 //  WORKFLOW TAB
 // =====================================================================
 
-async function loadWorkflowData() {
+function renderProjectDetailWorkflow(el, proj) {
+  const ideActive = proj.active_in_ide || proj.activeInIde;
+  let html = `<div class="project-detail-header">
+    <div>
+      <button class="back-btn" onclick="selectProject(null)">&larr; All Projects</button>
+      <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)}</h2>
+      ${ideActive ? `<span class="ide-badge" title="${esc(proj.ide || 'IDE')} connected">IN IDE${proj.ide ? ' · ' + esc(proj.ide) : ''}</span>` : ''}
+    </div>
+    <div class="project-detail-actions">
+      <span class="sb-btn-action ${ideActive ? 'ide-active' : ''}" title="${ideActive ? 'Connected via MCP' : 'No active IDE connection'}" style="cursor:default;opacity:${ideActive ? '1' : '0.5'}">
+        ${ideActive ? '&#x1F7E2; Connected' : '&#x26AA; Not Connected'}
+      </span>
+    </div>
+  </div>`;
+  html += `<div class="project-tab-strip">
+    <button class="project-tab" onclick="setProjectDetailTab('notes')">Notes</button>
+    <button class="project-tab active">Workflow</button>
+  </div>`;
+  html += `<div id="workflow-content"></div>`;
+  el.innerHTML = html;
+  renderWorkflowContent(document.getElementById('workflow-content'));
+}
+
+async function loadWorkflowData(projectId) {
+  if (!projectId) {
+    workflowStatus = null; workflowChangelog = null;
+    workflowPrompts = []; workflowAudits = null;
+    return;
+  }
   [workflowStatus, workflowChangelog, workflowPrompts, workflowAudits] = await Promise.all([
-    window.quickclip.getWorkflowStatus(),
-    window.quickclip.getWorkflowChangelog(),
-    window.quickclip.getWorkflowPrompts(),
-    window.quickclip.getWorkflowAudits(),
+    window.quickclip.getWorkflowStatus(projectId),
+    window.quickclip.getWorkflowChangelog(projectId),
+    window.quickclip.getWorkflowPrompts(projectId),
+    window.quickclip.getWorkflowAudits(projectId),
   ]);
 }
 
 function renderWorkflowSidebar(el) {
+  const proj = projects.find(p => p.id === selectedProjectId);
+  const projName = proj ? proj.name : '';
   const sections = [
     { id: 'status', label: 'Status' },
     { id: 'prompts', label: 'Prompts' },
@@ -683,16 +731,40 @@ function renderWorkflowSidebar(el) {
     { id: 'session', label: 'Session' },
     { id: 'changelog', label: 'Changelog' },
   ];
-  let html = '<div class="sec">Workflow</div>';
+  let html = `<div class="sec">${esc(projName)} · Workflow</div>`;
   sections.forEach((s) => {
     html += `<button class="sb-btn${workflowSection === s.id ? ' active' : ''}" onclick="workflowSection='${s.id}';renderAll()">${esc(s.label)}</button>`;
   });
+  html += `<div class="sec">View</div>`;
+  html += `<button class="sb-btn" onclick="setProjectDetailTab('notes')">&#x2190; Back to Notes</button>`;
   el.innerHTML = html;
 }
 
+function setProjectDetailTab(tab) {
+  projectDetailTab = tab;
+  if (tab === 'workflow' && selectedProjectId) {
+    loadWorkflowData(selectedProjectId).then(renderAll);
+  } else {
+    renderAll();
+  }
+}
+
 function renderWorkflowContent(el) {
+  const proj = projects.find(p => p.id === selectedProjectId);
+  if (!proj) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Project Selected</h2><p>Open a project to view its workflow.</p></div>';
+    return;
+  }
+  if (!proj.repo_path) {
+    el.innerHTML = `<div class="wf-empty"><h2>No repo path set</h2><p>This project has no <code>repo_path</code> — set one in the project Edit dialog so HuminLoop can find its <code>.ai-workflow/</code> directory.</p></div>`;
+    return;
+  }
   if (!workflowStatus || !workflowStatus.hasWorkflow) {
-    el.innerHTML = '<div class="wf-empty"><h2>No Workflow Found</h2><p>No <code>.ai-workflow/</code> directory detected in this project.</p></div>';
+    el.innerHTML = `<div class="wf-empty">
+      <h2>Workflow not initialized</h2>
+      <p>No <code>.ai-workflow/</code> directory at <code>${esc(proj.repo_path)}</code>.</p>
+      <button class="btn-primary" onclick="initWorkflowForProject(${proj.id})">Initialize workflow</button>
+    </div>`;
     return;
   }
   if (workflowSection === 'status') renderWorkflowStatus(el);
@@ -752,15 +824,54 @@ function renderWorkflowStatus(el) {
 }
 
 async function toggleRelay() {
-  const next = await window.quickclip.toggleRelayMode();
+  if (!selectedProjectId) return;
+  const next = await window.quickclip.toggleRelayMode(selectedProjectId);
   workflowStatus.relayMode = next;
   renderAll();
 }
 
 async function toggleAudit() {
-  const next = await window.quickclip.toggleAuditWatch();
+  if (!selectedProjectId) return;
+  const next = await window.quickclip.toggleAuditWatch(selectedProjectId);
   workflowStatus.auditMode = next;
   renderAll();
+}
+
+// Display zoom controls — Chromium zoom levels are integer steps where each ≈ 20%.
+// Level 0 = 100%, +1 ≈ 120%, -1 ≈ 83%, etc. We clamp [-3, 3] in the main process.
+async function setZoom(level) {
+  const applied = await window.quickclip.setZoomLevel(level);
+  updateZoomReadout(applied);
+}
+async function adjustZoom(delta) {
+  const current = await window.quickclip.getZoomLevel();
+  await setZoom(current + delta);
+}
+function updateZoomReadout(level) {
+  const pct = Math.round(Math.pow(1.2, level) * 100);
+  const el = document.getElementById('zoomReadout');
+  if (el) el.textContent = pct + '%';
+}
+// Keep the readout in sync when Settings opens.
+async function refreshZoomReadout() {
+  const level = await window.quickclip.getZoomLevel();
+  updateZoomReadout(level);
+}
+
+async function initWorkflowForProject(projectId) {
+  try {
+    const result = await window.quickclip.initDevWorkflow(projectId);
+    if (!result || !result.success) {
+      const reason = result?.reason || 'unknown';
+      showToast(`Initialization failed: ${reason}`);
+      return;
+    }
+    showToast('Workflow initialized');
+    await loadWorkflowData(projectId);
+    renderAll();
+  } catch (e) {
+    showToast(`Initialization failed: ${e.message}`);
+  }
 }
 
 let workflowPromptFilter = null;
@@ -859,9 +970,8 @@ function renderContent() {
   if (showTrash) renderTrashContent(el);
   else if (activeTab === 'general') renderGeneralContent(el);
   else if (activeTab === 'projects') renderProjectsContent(el);
-  else if (activeTab === 'settings') { renderSettingsContent(el); loadPromptBlocks(); loadAuditLog(); }
+  else if (activeTab === 'settings') { renderSettingsContent(el); loadPromptBlocks(); loadAuditLog(); refreshZoomReadout(); }
   else if (activeTab === 'help') renderHelpContent(el);
-  else if (activeTab === 'workflow') { loadWorkflowData().then(() => renderWorkflowContent(el)); }
 }
 
 // ── General Notes ──
@@ -1135,6 +1245,13 @@ function renderProjectDetail(el) {
   const proj = projects.find((p) => p.id === selectedProjectId);
   if (!proj) { selectProject(null); return; }
 
+  // If the workflow sub-tab is active, render the workflow content here. The
+  // sidebar already swapped to renderWorkflowSidebar via renderSidebar().
+  if (projectDetailTab === 'workflow') {
+    renderProjectDetailWorkflow(el, proj);
+    return;
+  }
+
   let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
   const completedCount = projectClips.filter((c) => c.completedAt).length;
   if (hideCompleted) {
@@ -1164,10 +1281,10 @@ function renderProjectDetail(el) {
     <div>
       <button class="back-btn" onclick="selectProject(null)">&larr; All Projects</button>
       <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)}</h2>
-      ${ideActive ? '<span class="ide-badge">IN IDE</span>' : ''}
+      ${ideActive ? `<span class="ide-badge" title="${esc(proj.ide || 'IDE')} connected">IN IDE${proj.ide ? ' · ' + esc(proj.ide) : ''}</span>` : ''}
     </div>
     <div class="project-detail-actions">
-      <span class="sb-btn-action ${ideActive ? 'ide-active' : ''}" title="${ideActive ? 'Connected via MCP' : 'No active IDE connection'}" style="cursor:default;opacity:${ideActive ? '1' : '0.5'}">
+      <span class="sb-btn-action ${ideActive ? 'ide-active' : ''}" title="${ideActive ? 'Connected via MCP — one IDE per project; new IDE sessions on this project are rejected while this one is active' : 'No active IDE connection. Each project allows a single IDE at a time.'}" style="cursor:default;opacity:${ideActive ? '1' : '0.5'}">
         ${ideActive ? '&#x1F7E2; Connected' : '&#x26AA; Not Connected'}
       </span>
       <button class="sb-btn-action ${selectMode ? 'select-active' : ''}" onclick="toggleSelectMode()" title="${selectMode ? 'Cancel selection' : 'Select clips to combine into one prompt'}">
@@ -1177,6 +1294,12 @@ function renderProjectDetail(el) {
       <button class="sb-btn-action" onclick="editProject(${proj.id})">Edit</button>
       <button class="sb-btn-action danger" onclick="confirmDeleteProject(${proj.id})">Delete</button>
     </div>
+  </div>`;
+
+  // Notes / Workflow sub-tab strip
+  html += `<div class="project-tab-strip">
+    <button class="project-tab${projectDetailTab === 'notes' ? ' active' : ''}" onclick="setProjectDetailTab('notes')">Notes</button>
+    <button class="project-tab${projectDetailTab === 'workflow' ? ' active' : ''}" onclick="setProjectDetailTab('workflow')">Workflow</button>
   </div>`;
 
   if (completedCount > 0 || withPromptCount > 0) {
@@ -1311,6 +1434,7 @@ async function selectProject(id) {
   selectMode = false;
   selectedClipIds.clear();
   devFilter = 'all';
+  projectDetailTab = 'notes';
   // Sync active project setting in focused mode
   if (isFocusedMode && id !== null) {
     window.quickclip.setFocusedActiveProject(id);
@@ -1319,7 +1443,7 @@ async function selectProject(id) {
     if (isDevMode) {
       const project = projects.find(p => p.id === id);
       ideStatus = await window.quickclip.detectIde(project?.repo_path);
-      devPrompts = await window.quickclip.getWorkflowPrompts();
+      devPrompts = await window.quickclip.getWorkflowPrompts(id);
       startDevPolling();
     } else {
       ideStatus = null;
@@ -1753,6 +1877,22 @@ function renderSettingsContent(el) {
       <div class="version-banner">
         HuminLoop v${esc(ver.version)}
         <span class="version-detail">Electron ${esc(ver.electron)} · Node ${esc(ver.node)}</span>
+      </div>
+
+      <div class="settings-section">
+        <h3>Display</h3>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Display size</div>
+            <div class="setting-desc">Scales text, spacing and icons together. Also bound to <kbd>Ctrl</kbd>+<kbd>=</kbd>/<kbd>-</kbd>/<kbd>0</kbd>.</div>
+          </div>
+          <div class="zoom-controls">
+            <button class="zoom-btn" id="zoomOutBtn" onclick="adjustZoom(-1)" title="Smaller (Ctrl+-)">A&#8722;</button>
+            <button class="zoom-btn" onclick="setZoom(0)" title="Reset to default (Ctrl+0)">Reset</button>
+            <button class="zoom-btn" id="zoomInBtn" onclick="adjustZoom(1)" title="Larger (Ctrl+=)">A+</button>
+            <span class="zoom-readout" id="zoomReadout">100%</span>
+          </div>
+        </div>
       </div>
 
       <div class="settings-section">
@@ -2821,7 +2961,7 @@ function startDevPolling() {
     if (!isDevMode || !isFocusedMode) return;
     try {
       const oldPrompts = JSON.stringify(devPrompts);
-      devPrompts = await window.quickclip.getWorkflowPrompts();
+      devPrompts = await window.quickclip.getWorkflowPrompts(selectedProjectId);
 
       // Auto-advance plans if relay mode is auto
       const plans = await window.quickclip.getActivePlans();
@@ -2829,7 +2969,7 @@ function startDevPolling() {
         const currentTask = plan.tasks[plan.currentIndex];
         const prompt = devPrompts.find(p => p.id === currentTask?.promptId);
         if (prompt?.status === 'DONE' && plan.currentIndex < plan.totalTasks - 1) {
-          const wfStatus = await window.quickclip.getWorkflowStatus();
+          const wfStatus = await window.quickclip.getWorkflowStatus(selectedProjectId);
           if (wfStatus.relayMode === 'auto') {
             await window.quickclip.advancePlan(plan.planId);
           }
@@ -2862,7 +3002,7 @@ window.addEventListener('focus', async () => {
       if (isDevMode) {
         const project = projects.find(p => p.id === selectedProjectId);
         ideStatus = await window.quickclip.detectIde(project?.repo_path);
-        devPrompts = await window.quickclip.getWorkflowPrompts();
+        devPrompts = await window.quickclip.getWorkflowPrompts(selectedProjectId);
       }
       updateModeLabel();
       renderAll();

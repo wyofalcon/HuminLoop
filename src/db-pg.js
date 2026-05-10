@@ -87,6 +87,8 @@ async function runMigrations() {
     `ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_in_ide BOOLEAN NOT NULL DEFAULT FALSE`,
     `ALTER TABLE projects ADD COLUMN IF NOT EXISTS ide VARCHAR(50) DEFAULT NULL`,
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS sent_to_ide_at TIMESTAMPTZ DEFAULT NULL`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_session_id TEXT DEFAULT NULL`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ DEFAULT NULL`,
     `ALTER TABLE clips DROP CONSTRAINT IF EXISTS clips_source_check`,
     `ALTER TABLE clips ADD CONSTRAINT clips_source_check CHECK (source IN ('full', 'focused'))`,
   ];
@@ -417,6 +419,8 @@ async function updateProject(id, data) {
   if (data.color !== undefined) { fields.push(`color = $${idx++}`); params.push(data.color); }
   if (data.active_in_ide !== undefined) { fields.push(`active_in_ide = $${idx++}`); params.push(data.active_in_ide); }
   if (data.ide !== undefined) { fields.push(`ide = $${idx++}`); params.push(data.ide); }
+  if (data.active_session_id !== undefined) { fields.push(`active_session_id = $${idx++}`); params.push(data.active_session_id); }
+  if (data.last_heartbeat_at !== undefined) { fields.push(`last_heartbeat_at = $${idx++}`); params.push(data.last_heartbeat_at); }
 
   if (fields.length === 0) return null;
 

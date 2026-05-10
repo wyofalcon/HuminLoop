@@ -20,5 +20,7 @@ screenshots/
 .ai-workflow/context/.dashboard.pid
 .ai-workflow/context/.audit-last-*
 .ai-workflow/context/WORKFLOW_CHANGE_PENDING
+.ai-workflow/context/IDE_PROMPT.md
+.ai-workflow/context/ide-prompt-image.png
 .claude-session-state.json
 .claude-project-journal.md

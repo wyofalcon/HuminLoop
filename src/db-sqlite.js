@@ -157,6 +157,8 @@ function runSqliteMigrations() {
     `ALTER TABLE projects ADD COLUMN active_in_ide INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE projects ADD COLUMN ide TEXT DEFAULT NULL`,
     `ALTER TABLE clips ADD COLUMN sent_to_ide_at TEXT DEFAULT NULL`,
+    `ALTER TABLE projects ADD COLUMN active_session_id TEXT DEFAULT NULL`,
+    `ALTER TABLE projects ADD COLUMN last_heartbeat_at TEXT DEFAULT NULL`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column/index already exists */ }
@@ -459,6 +461,8 @@ async function updateProject(id, data) {
   if (data.color !== undefined) { fields.push('color = ?'); params.push(data.color); }
   if (data.active_in_ide !== undefined) { fields.push('active_in_ide = ?'); params.push(data.active_in_ide ? 1 : 0); }
   if (data.ide !== undefined) { fields.push('ide = ?'); params.push(data.ide); }
+  if (data.active_session_id !== undefined) { fields.push('active_session_id = ?'); params.push(data.active_session_id); }
+  if (data.last_heartbeat_at !== undefined) { fields.push('last_heartbeat_at = ?'); params.push(data.last_heartbeat_at); }
 
   if (fields.length === 0) return null;
 

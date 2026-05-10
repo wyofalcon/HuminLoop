@@ -1,5 +1,16 @@
 # Pre-Feature Audit Log
 
+## 2026-05-09 — Project-Scoped Workflow Tab + Multi-IDE Sessions
+
+- Duplicated workflow read logic in main.js IPC and api-server endpoints (RELAY_MODE, AUDIT_WATCH_MODE, SESSION.md, CHANGELOG.md, AUDIT_LOG.md) — consolidate via new `workflow-context` helpers (`readRelayMode`, `readAuditMode`, `readChangelog`, `readAuditLog`)
+- `get-workflow-prompts` IPC handler re-implements `getPendingPrompts()` from workflow-context.js — delegate to module instead
+- `updatePromptStatus()` in main.js (line 58) and `/api/workflow/prompts/:id` PATCH duplicate prompt-tracker write logic — move to `workflow-context.updatePromptTracker(repoPath, ...)`
+- All hardcoded `path.join(__dirname, '..', '.ai-workflow', ...)` reads break under per-project scoping — must accept `projectId` and resolve to `project.repo_path`
+- `scaffoldWorkflow()` lacks `fs.existsSync(repoPath)` check before mkdir — add validation as part of refactor
+- `getGitState()` and `readRelayMode()` exported from workflow-context.js but only `readRelayMode` will be needed externally after refactor — leave both exported (low cost)
+- Toggle handlers (`toggle-relay-mode`, `toggle-audit-watch`) currently IPC-only with no API mirror — add API endpoints for consistency since workflow moves into project detail
+- Recommendation: bundle all consolidation in this single PR rather than tracking as follow-up — the refactor touches the same files anyway
+
 ## 2026-04-09 — Queue as Plan (Sequential Task Dispatch)
 
 - Plan dispatch reuses existing `formatBundle`, `generatePromptId`, `appendToPromptTracker`, `workflowContext.assembleBundle` — no new duplicated logic

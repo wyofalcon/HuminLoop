@@ -12,12 +12,17 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { URL } = require('url');
+const workflowContext = require('./workflow-context');
 
-// Normalize repo_path: strip quotes from "Copy as Path", strip .code-workspace filename
+// Normalize repo_path: strip quotes from "Copy as Path", strip .code-workspace
+// filename, and canonicalize WSL UNC paths (\\wsl.localhost\<distro>\... or
+// \\wsl$\<distro>\...) to their underlying Linux path.
 function normalizeRepoPath(p) {
   if (!p) return p;
   p = p.replace(/^["']|["']$/g, '').trim();
   p = p.replace(/[\\/][^\\/]+\.code-workspace$/i, '');
+  const wslMatch = p.replace(/\\/g, '/').match(/^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+(\/.*)?$/i);
+  if (wslMatch) p = wslMatch[1] || '/';
   return p;
 }
 
@@ -78,7 +83,18 @@ const HEARTBEAT_CHECK_INTERVAL = 15_000;
 
 function startApiServer(deps) {
   const { db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry } = deps;
-  const { notifyMainWindow, proposeWorkspace, showMainWindow } = deps;
+  const { notifyMainWindow, proposeWorkspace, showMainWindow, initWorkflow } = deps;
+
+  // Resolve a project's repo_path from a query string (?projectId=N).
+  // Returns { project, repoPath } or sends 400/404 and returns null.
+  async function resolveProjectFromQuery(url, res) {
+    const projectId = parseInt(url.searchParams.get('projectId'), 10);
+    if (!projectId) { error(res, 'projectId query parameter required'); return null; }
+    const project = await db.getProject(projectId);
+    if (!project) { error(res, 'Project not found', 404); return null; }
+    if (!project.repo_path) { error(res, 'Project has no repo_path', 422); return null; }
+    return { project, repoPath: project.repo_path };
+  }
 
   const server = http.createServer(async (req, res) => {
     // CORS headers for local dev tools
@@ -291,6 +307,10 @@ function startApiServer(deps) {
       }
 
       // ── IDE Heartbeat ──
+      // One IDE session may own a project at a time. The MCP server sends a stable
+      // session_id derived from PID + hostname + workspace root. If a different
+      // session_id heartbeats while the current owner is still recent (< 60s), we
+      // reject with 409 so the second IDE knows it's a duplicate.
 
       if (method === 'POST' && (m = matchRoute('/api/projects/:id/heartbeat', pathname))) {
         const projectId = parseInt(m.params.id, 10);
@@ -298,20 +318,49 @@ function startApiServer(deps) {
         if (!project) return error(res, 'Project not found', 404);
         const body = await parseBody(req);
         const ide = body.ide || 'unknown';
-        ideHeartbeats.set(projectId, { lastSeen: Date.now(), ide });
-        // If project wasn't active, flip it on
-        if (!project.active_in_ide) {
-          await db.updateProject(projectId, { active_in_ide: true, ide });
-          if (notifyMainWindow) notifyMainWindow('projects-changed');
+        const sessionId = body.session_id || null;
+
+        const now = Date.now();
+        const existing = ideHeartbeats.get(projectId);
+        const ownerSession = project.active_session_id || existing?.sessionId || null;
+        const ownerFresh = existing && (now - existing.lastSeen) < HEARTBEAT_TIMEOUT;
+
+        if (sessionId && ownerSession && ownerSession !== sessionId && ownerFresh) {
+          if (notifyMainWindow) {
+            notifyMainWindow('ide-collision', {
+              project_id: projectId,
+              project_name: project.name,
+              owner_ide: existing?.ide || project.ide,
+              rejected_ide: ide,
+            });
+          }
+          return json(res, {
+            error: 'project_busy',
+            owner_session_id: ownerSession,
+            owner_ide: existing?.ide || project.ide,
+            message: `Project ${projectId} is already claimed by another IDE session.`,
+          }, 409);
         }
-        return json(res, { ok: true, active_in_ide: true });
+
+        ideHeartbeats.set(projectId, { lastSeen: now, ide, sessionId });
+        const updates = {
+          last_heartbeat_at: new Date(now).toISOString(),
+          active_session_id: sessionId,
+        };
+        if (!project.active_in_ide || project.ide !== ide) {
+          updates.active_in_ide = true;
+          updates.ide = ide;
+        }
+        await db.updateProject(projectId, updates);
+        if (notifyMainWindow) notifyMainWindow('projects-changed');
+        return json(res, { ok: true, active_in_ide: true, session_id: sessionId });
       }
 
       if (method === 'GET' && pathname === '/api/ide/connections') {
         const connections = [];
         for (const [pid, info] of ideHeartbeats) {
           const age = Date.now() - info.lastSeen;
-          if (age < HEARTBEAT_TIMEOUT) connections.push({ project_id: pid, ide: info.ide, age_ms: age });
+          if (age < HEARTBEAT_TIMEOUT) connections.push({ project_id: pid, ide: info.ide, session_id: info.sessionId || null, age_ms: age });
         }
         return json(res, connections);
       }
@@ -431,47 +480,65 @@ function startApiServer(deps) {
         return json(res, { success: true, prompt, path: project.repo_path });
       }
 
-      // ── Workflow ──
+      // ── Workflow (per-project) ──
+      // All /api/workflow/* endpoints require ?projectId=N. The handlers resolve
+      // the project's repo_path and read from {repo_path}/.ai-workflow/context/.
 
       if (method === 'GET' && pathname === '/api/workflow/status') {
-        const workflowDir = path.join(__dirname, '..', '.ai-workflow');
-        const contextDir = path.join(workflowDir, 'context');
-        const read = (f) => { try { return fs.readFileSync(path.join(contextDir, f), 'utf8').trim(); } catch { return null; } };
+        const ctx = await resolveProjectFromQuery(url, res);
+        if (!ctx) return;
         return json(res, {
-          relayMode: read('RELAY_MODE') || 'review',
-          auditMode: read('AUDIT_WATCH_MODE') || 'off',
-          session: read('SESSION.md'),
-          hasWorkflow: fs.existsSync(workflowDir),
+          relayMode: workflowContext.readRelayMode(ctx.repoPath),
+          auditMode: workflowContext.readAuditMode(ctx.repoPath),
+          session: workflowContext.readSessionContext(ctx.repoPath),
+          hasWorkflow: workflowContext.hasWorkflow(ctx.repoPath),
         });
       }
 
       if (method === 'GET' && pathname === '/api/workflow/changelog') {
-        const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'CHANGELOG.md');
-        try { return json(res, { content: fs.readFileSync(p, 'utf8') }); }
-        catch { return json(res, { content: null }); }
+        const ctx = await resolveProjectFromQuery(url, res);
+        if (!ctx) return;
+        return json(res, { content: workflowContext.readChangelog(ctx.repoPath) });
       }
 
       if (method === 'GET' && pathname === '/api/workflow/prompts') {
-        const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
-        try {
-          const raw = fs.readFileSync(p, 'utf8').trim();
-          if (!raw) return json(res, []);
-          const prompts = raw.split('\n').map((line) => {
-            const parts = line.split('|');
-            return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3],
-              type: parts[4] || 'CRAFTED', parentId: parts[5] || null,
-              files: parts[6] ? parts[6].split(',').filter(Boolean) : [] };
-          }).reverse();
-          return json(res, prompts);
-        } catch { return json(res, []); }
+        const ctx = await resolveProjectFromQuery(url, res);
+        if (!ctx) return;
+        return json(res, workflowContext.readAllPrompts(ctx.repoPath));
       }
 
       if (method === 'GET' && pathname === '/api/workflow/audits') {
-        const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'AUDIT_LOG.md');
-        try { return json(res, { content: fs.readFileSync(p, 'utf8') }); } catch { return json(res, { content: null }); }
+        const ctx = await resolveProjectFromQuery(url, res);
+        if (!ctx) return;
+        return json(res, { content: workflowContext.readAuditFindings(ctx.repoPath) });
       }
 
-      // PATCH /api/workflow/prompts/:id — update prompt status
+      if (method === 'POST' && (m = matchRoute('/api/projects/:id/toggle-relay-mode', pathname))) {
+        const project = await db.getProject(parseInt(m.params.id, 10));
+        if (!project?.repo_path) return error(res, 'Project has no repo_path', 422);
+        const current = workflowContext.readRelayMode(project.repo_path);
+        const next = current === 'auto' ? 'review' : 'auto';
+        workflowContext.setRelayMode(project.repo_path, next);
+        return json(res, { mode: next });
+      }
+
+      if (method === 'POST' && (m = matchRoute('/api/projects/:id/toggle-audit-watch', pathname))) {
+        const project = await db.getProject(parseInt(m.params.id, 10));
+        if (!project?.repo_path) return error(res, 'Project has no repo_path', 422);
+        const current = workflowContext.readAuditMode(project.repo_path);
+        const next = current === 'on' ? 'off' : 'on';
+        workflowContext.setAuditMode(project.repo_path, next);
+        return json(res, { mode: next });
+      }
+
+      if (method === 'POST' && (m = matchRoute('/api/projects/:id/init-workflow', pathname))) {
+        if (!initWorkflow) return error(res, 'init-workflow not available', 503);
+        const result = await initWorkflow(parseInt(m.params.id, 10));
+        return json(res, result);
+      }
+
+      // PATCH /api/workflow/prompts/:id — update prompt status. Scans all projects'
+      // PROMPT_TRACKER.log files for the given prompt id; first match wins.
       if (method === 'PATCH' && (m = matchRoute('/api/workflow/prompts/:id', pathname))) {
         const body = await parseBody(req);
         const newStatus = body.status;
@@ -481,39 +548,14 @@ function startApiServer(deps) {
         if (!validStatuses.includes(newStatus)) return error(res, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
 
         const promptId = decodeURIComponent(m.params.id);
-
-        // Find the project with this prompt — scan all projects for PROMPT_TRACKER.log
         const projects = await db.getProjects();
-        let updated = false;
         for (const p of projects) {
           if (!p.repo_path) continue;
-          const trackerPath = path.join(p.repo_path, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
-          try {
-            const raw = fs.readFileSync(trackerPath, 'utf8');
-            if (!raw.includes(promptId)) continue;
-
-            const lines = raw.split('\n');
-            const newLines = lines.map(line => {
-              if (line.startsWith(promptId + '|')) {
-                const parts = line.split('|');
-                parts[1] = newStatus;
-                // Append affected files if provided (7th field)
-                if (body.files) {
-                  while (parts.length < 7) parts.push('');
-                  parts[6] = typeof body.files === 'string' ? body.files : body.files.join(',');
-                }
-                return parts.join('|');
-              }
-              return line;
-            });
-            fs.writeFileSync(trackerPath, newLines.join('\n'), 'utf8');
-            updated = true;
-            break;
-          } catch {}
+          if (workflowContext.updatePromptTracker(p.repo_path, promptId, newStatus, body.files)) {
+            return json(res, { success: true, id: promptId, status: newStatus, project_id: p.id });
+          }
         }
-
-        if (!updated) return error(res, 'Prompt not found in any project tracker', 404);
-        return json(res, { success: true, id: promptId, status: newStatus });
+        return error(res, 'Prompt not found in any project tracker', 404);
       }
 
       // ── 404 ──
@@ -534,7 +576,7 @@ function startApiServer(deps) {
         try {
           const project = await db.getProject(pid);
           if (project && project.active_in_ide) {
-            await db.updateProject(pid, { active_in_ide: false, ide: null });
+            await db.updateProject(pid, { active_in_ide: false, ide: null, active_session_id: null });
             if (notifyMainWindow) notifyMainWindow('projects-changed');
             console.log(`[HuminLoop API] IDE heartbeat expired for project ${pid}`);
           }
@@ -551,7 +593,7 @@ function startApiServer(deps) {
       const projects = await db.getProjects();
       for (const p of projects) {
         if (p.active_in_ide && !ideHeartbeats.has(p.id)) {
-          await db.updateProject(p.id, { active_in_ide: false, ide: null });
+          await db.updateProject(p.id, { active_in_ide: false, ide: null, active_session_id: null });
           console.log(`[HuminLoop API] Cleared stale IDE flag for project ${p.id} (${p.name})`);
         }
       }

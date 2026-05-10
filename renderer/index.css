@@ -794,6 +794,51 @@ body {
 }
 .project-detail-actions { display: flex; gap: 6px; }
 
+/* Display size controls in Settings */
+.zoom-controls { display: flex; gap: 6px; align-items: center; }
+.zoom-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 4px 10px;
+  cursor: pointer;
+  min-width: 36px;
+}
+.zoom-btn:hover { background: var(--bg-hover); border-color: var(--accent); }
+.zoom-readout {
+  color: var(--text-muted);
+  font-size: 12px;
+  min-width: 44px;
+  text-align: right;
+}
+
+/* Notes / Workflow sub-tabs inside the project detail view */
+.project-tab-strip {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin: 8px 0 12px 0;
+}
+.project-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 6px 14px;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.project-tab:hover { color: var(--text); background: var(--bg-hover); }
+.project-tab.active {
+  background: var(--bg-card);
+  border-color: var(--border);
+  color: var(--text);
+}
+
 .sb-btn-action {
   background: var(--bg-card);
   border: 1px solid var(--border-mid);

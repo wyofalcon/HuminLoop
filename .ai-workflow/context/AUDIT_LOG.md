@@ -1,5 +1,14 @@
 # Pre-Feature Audit Log
 
+## 2026-06-15 — Capture Popup Follows Active Monitor + Raise-To-Top
+
+- Duplicated show/focus pattern in `createCaptureWindow` (src/main.js): reuse path (was lines 338-341) and `ready-to-show` callback (was lines 363-365) both ran `.show()` / `.focus()` / `.webContents.focus()` — consolidated into new `raiseCaptureWindow()` helper
+- Hardcoded `screen.getPrimaryDisplay()` for positioning at src/main.js:348 (capture), :379 (toolbar), :466 (overlay) — no multi-monitor logic existed anywhere; no `getCursorScreenPoint`/`getDisplayNearestPoint` calls in the codebase
+- Reuse path bug: existing capture window was re-shown but never repositioned, so it stayed on whatever monitor it last opened — fixed by recomputing position via `activeCaptureWorkArea()` on both paths
+- Inconsistent positioning strategies across windows (capture/toolbar use `screenW`, overlay uses `display.bounds`) — left toolbar/overlay untouched; scoped this change to the capture popup only per the request
+- No dead code found; all window globals referenced
+- Recommendation (implemented): derive target display from cursor position, extract `activeCaptureWorkArea()`/`captureCornerPosition()`/`raiseCaptureWindow()` helpers, apply to create + reuse paths, bump always-on-top to `'screen-saver'` + `moveTop()` so the popup is never buried
+
 ## 2026-05-09 — Project-Scoped Workflow Tab + Multi-IDE Sessions
 
 - Duplicated workflow read logic in main.js IPC and api-server endpoints (RELAY_MODE, AUDIT_WATCH_MODE, SESSION.md, CHANGELOG.md, AUDIT_LOG.md) — consolidate via new `workflow-context` helpers (`readRelayMode`, `readAuditMode`, `readChangelog`, `readAuditLog`)

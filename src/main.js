@@ -334,21 +334,55 @@ async function createMainWindow() {
   });
 }
 
+// Work area of the display where the screenshot was just taken. We use the
+// cursor's current screen as the signal — the user was interacting on that
+// monitor, so the popup should follow them there instead of always landing on
+// the primary display. Falls back to the primary display if lookup fails.
+function activeCaptureWorkArea() {
+  try {
+    const point = screen.getCursorScreenPoint();
+    return screen.getDisplayNearestPoint(point).workArea;
+  } catch {
+    return screen.getPrimaryDisplay().workArea;
+  }
+}
+
+// Top-right corner (with a 20px inset) of the given work area for a window of
+// the given width, so the popup hugs the corner of the active monitor.
+function captureCornerPosition(area, width) {
+  return { x: area.x + area.width - (width + 20), y: area.y + 20 };
+}
+
+// Forcefully raise the capture popup above other windows so it is never buried.
+// Bumping to the 'screen-saver' level guarantees it clears normal always-on-top
+// and fullscreen windows; moveTop()/focus() pull it to the front of the z-order.
+function raiseCaptureWindow() {
+  if (!captureWindow || captureWindow.isDestroyed()) return;
+  captureWindow.setAlwaysOnTop(true, 'screen-saver');
+  captureWindow.show();
+  captureWindow.moveTop();
+  captureWindow.focus();
+  captureWindow.webContents.focus();
+}
+
 async function createCaptureWindow(imageDataURL, windowMeta = null) {
   if (captureWindow && !captureWindow.isDestroyed()) {
-    captureWindow.show();
-    captureWindow.focus();
-    captureWindow.webContents.focus();
+    // Reuse path: move the existing popup onto the monitor the user is on now,
+    // then raise it. Without this it would stay wherever it last opened.
+    const [w] = captureWindow.getSize();
+    const { x, y } = captureCornerPosition(activeCaptureWorkArea(), w);
+    captureWindow.setPosition(x, y);
+    raiseCaptureWindow();
     captureWindow.webContents.send('new-screenshot', imageDataURL, windowMeta);
     return;
   }
   const mode = await getAppMode();
   const htmlFile = mode === 'focused' ? 'focused-capture.html' : 'capture.html';
   const captureSize = mode === 'focused' ? { width: 340, height: 420 } : { width: 460, height: 580 };
-  const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
+  const { x, y } = captureCornerPosition(activeCaptureWorkArea(), captureSize.width);
   captureWindow = new BrowserWindow({
     width: captureSize.width, height: captureSize.height,
-    x: screenW - (captureSize.width + 20), y: 20,
+    x, y,
     frame: false, alwaysOnTop: true,
     resizable: true, skipTaskbar: true,
     backgroundColor: '#1e1e2e',
@@ -360,9 +394,7 @@ async function createCaptureWindow(imageDataURL, windowMeta = null) {
   });
   captureWindow.loadFile(path.join(__dirname, '..', 'renderer', htmlFile));
   captureWindow.once('ready-to-show', () => {
-    captureWindow.show();
-    captureWindow.focus();
-    captureWindow.webContents.focus();
+    raiseCaptureWindow();
     if (imageDataURL) captureWindow.webContents.send('new-screenshot', imageDataURL, windowMeta);
   });
   captureWindow.on('closed', () => { captureWindow = null; });

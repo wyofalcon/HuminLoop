@@ -1,5 +1,23 @@
 # Pre-Feature Audit Log
 
+## 2026-07-21 — Tag Filter AND/OR Mode + Tag Groups
+
+- Settings persistence is a JSON key/value store end-to-end: `saveSetting(key, value)` JSON-stringifies any value and `getSettings()` parses it back (db-sqlite.js:504-522, db-pg.js:470-489). Arbitrary keys work with **zero schema migration** — mirrors existing `prompt_blocks`, `audit_log`, `ignored_workspace_paths` keys. Store tag groups as `saveSetting('tag_groups', { [projectId]: [{id,name,tags}] })`.
+- No existing tag-group / saved-filter / tag-collection concept anywhere — clean add, no dead code to remove.
+- AND mode is a one-line change in `getFilteredProjectClips()`: `.some()` (OR / any) → `.every()` (AND / all), gated on a mode flag.
+- Do NOT add separate IPC/API/MCP handlers for group CRUD — the generic `saveSetting`/`getSettings` surface is sufficient; groups are small per-project blobs.
+- Insertion points confirmed: match-mode toggle after the "All Tags" button in the sidebar Tags section; group buttons in their own "Tag Groups" sidebar section; reuse the existing multi-select (`projectFilterTags`) as the source for "save as group".
+- Recommendation (applied): reuse the current selection as the group's tag set (no separate picker), persist per-project in one `tag_groups` settings key, keep match-mode a single global preference.
+
+## 2026-07-21 — Project Tag Filter (sidebar tag chooser)
+
+- Search predicate was duplicated ~3x in renderer/index.js (general-notes filter, `_doSearchProject`, and the intended shared spot) — consolidated into a single `clipMatchesQuery(c, q)` helper now used by all callers.
+- `_doSearchProject()` was a divergent code path: it re-implemented the search predicate inline, ignored the other active filters (completed/prompt/dev), and did not persist search state — so it could not compose with a tag filter. Fixed: it now sets `projectSearchQuery` and pulls its list from the shared `getFilteredProjectClips()` chain.
+- Introduced `getFilteredProjectClips()` as the single source of truth for the open project's visible clips (completed → prompt → dev → tags → search), used by both the full render and the incremental search render so they can never diverge.
+- Tag-collection patterns remain intentionally distinct (array/includes for general sidebar, Map+counts for the project tag list, Set for `getAllKnownTags`) — not unified, since each is used once and serves a different shape; a shared helper would add indirection without removing real duplication.
+- No dead code found in the sidebar/filter areas; all handlers are wired to UI.
+- Recommendation (applied): reuse the existing `filterTag`/`setTag` sidebar pattern for the new multi-select project tag section rather than adding a parallel mechanism; keep filter state resets in `selectProject`.
+
 ## 2026-06-15 — Capture Popup Follows Active Monitor + Raise-To-Top
 
 - Duplicated show/focus pattern in `createCaptureWindow` (src/main.js): reuse path (was lines 338-341) and `ready-to-show` callback (was lines 363-365) both ran `.show()` / `.focus()` / `.webContents.focus()` — consolidated into new `raiseCaptureWindow()` helper
@@ -258,3 +276,12 @@ No blocking issues. Feature can reuse existing project creation, settings storag
 4. Single `pkill -f "electron|node.*launch\.js"` command for process killing
 5. Extend `.ai-workflow/scripts/ensure-workflow.sh` to include C++ build tool checks in future
 6. Keep npm script minimal: `"deploy": "bash scripts/deploy.sh"`
+
+## 2026-07-21 — Build task (choose OS) + reinstall tooling
+
+- **Duplicated process-kill logic:** `deploy.sh` lines 43–59 implement OS-aware process killing (check if running, then kill), but `kill-all.sh` already exists as a dedicated, more comprehensive killer (handles legacy "quickclip" names, multiple kill patterns, graceful then forced). Both overlap; deploy.sh should delegate to kill-all.sh instead of reimplementing.
+- **No existing "build for chosen OS" script:** `package.json` has `build`, `build:win`, `build:linux`, `build:mac` npm scripts (direct electron-builder calls), but no wrapper script that prompts/detects OS and invokes the right target. No `build.sh` exists.
+- **Dead code:** None identified. `launch.js`, `kill-all.sh`, and `deploy.sh` all actively used via npm scripts.
+- **VS Code tasks:** All existing tasks are active and non-overlapping; no build tasks yet; clean structure.
+- **Inconsistent patterns:** `deploy.sh` duplicates process-kill logic instead of calling `kill-all.sh`. Two OS detection approaches: `uname -s` in bash vs `process.platform` in Node (acceptable divergence for different contexts).
+- **Recommendation:** Create NEW `scripts/build.sh` that reuses OS detection from `deploy.sh`, calls `bash scripts/kill-all.sh` (not reimplementing), installs deps if needed, prompts for or accepts OS arg, and runs `npm run build:win|linux` accordingly. Separate script is cleaner than extending deploy.sh (focused responsibility, DRY via kill-all.sh reuse). Optional future cleanup: refactor deploy.sh to call kill-all.sh instead of reimplementing lines 43–59.

@@ -28,6 +28,10 @@ let hideCompleted = false;
 let promptFilter = 'all'; // 'all' | 'with-prompt' | 'no-prompt'
 let selectMode = false;
 let selectedClipIds = new Set();
+let projectFilterTags = []; // tags chosen in the project sidebar (multi-select)
+let projectTagMatchMode = 'any'; // 'any' (OR) | 'all' (AND) — how selected tags combine
+let projectSearchQuery = ''; // raw project search text, kept in sync across re-renders
+let tagGroupNaming = false; // whether the "name a new tag group" input is showing
 
 // Dev mode state
 let isDevMode = false;
@@ -94,6 +98,10 @@ async function loadData() {
     window.quickclip.getProjects(),
     window.quickclip.getSettings(),
   ]);
+  // Restore the user's preferred tag match mode (persisted globally).
+  if (settings.tag_match_mode === 'all' || settings.tag_match_mode === 'any') {
+    projectTagMatchMode = settings.tag_match_mode;
+  }
   // In focused mode, auto-select the active project (or first project if none set)
   if (isFocusedMode && selectedProjectId === null) {
     const focusedProject = settings.focused_active_project;
@@ -420,6 +428,61 @@ function renderProjectsSidebar(el) {
 
   // IDE Connection section (focused mode only)
   html += renderIdeConnectionSection();
+
+  // Tags + saved tag groups for the open project — lets the user filter this
+  // project's clips by one or more tags. Only shown when a project is selected.
+  if (selectedProjectId !== null) {
+    // Saved tag groups (named tag sets applied as a one-click filter).
+    const tagGroups = getProjectTagGroups(selectedProjectId);
+    if (tagGroups.length > 0) {
+      html += '<div class="sec" style="margin-top:12px">Tag Groups</div>';
+      tagGroups.forEach((g) => {
+        const active = g.tags.length > 0
+          && g.tags.length === projectFilterTags.length
+          && g.tags.every((t) => projectFilterTags.includes(t));
+        html += `<button class="sb-btn tag-group-btn ${active ? 'active' : ''}" onclick="applyTagGroup('${escAttr(g.id)}')" title="Filter by ${escAttr(g.tags.map((t) => '#' + t).join(' '))}">
+          <span class="tg-name">${esc(g.name)}</span>
+          <span class="tg-right"><span class="sb-count">${g.tags.length}</span><span class="tg-del" onclick="event.stopPropagation();deleteTagGroup('${escAttr(g.id)}')" title="Delete group">&times;</span></span></button>`;
+      });
+    }
+
+    const tagCounts = new Map();
+    clips.forEach((c) => {
+      if (c.project_id !== selectedProjectId) return;
+      (c.tags || []).forEach((t) => tagCounts.set(t, (tagCounts.get(t) || 0) + 1));
+    });
+    const projTags = Array.from(tagCounts.keys()).sort((a, b) => a.localeCompare(b));
+    if (projTags.length > 0) {
+      const anyActive = projectFilterTags.length > 0;
+      // "Tags" header with an Any/All match-mode toggle (only useful with 2+ tags).
+      html += '<div class="sec tags-sec" style="margin-top:12px"><span>Tags</span>';
+      if (projTags.length > 1) {
+        html += `<span class="tag-mode">
+          <button class="tmode ${projectTagMatchMode === 'any' ? 'active' : ''}" onclick="setTagMatchMode('any')" title="Match clips with ANY selected tag (OR)">Any</button>
+          <button class="tmode ${projectTagMatchMode === 'all' ? 'active' : ''}" onclick="setTagMatchMode('all')" title="Match clips with ALL selected tags (AND)">All</button></span>`;
+      }
+      html += '</div>';
+      html += `<button class="sb-btn ${anyActive ? '' : 'active'}" onclick="clearProjectTags()" title="Show clips with any tag">All Tags</button>`;
+      projTags.forEach((tag) => {
+        const on = projectFilterTags.includes(tag);
+        html += `<button class="sb-btn ${on ? 'active' : ''}" onclick="toggleProjectTag('${escAttr(tag)}')" title="Filter by #${escAttr(tag)}">
+          <span>#${esc(tag)}</span><span class="sb-count">${tagCounts.get(tag)}</span></button>`;
+      });
+      if (anyActive) {
+        if (tagGroupNaming) {
+          html += `<div class="tag-group-form">
+            <input id="tagGroupNameInput" class="tag-group-input" placeholder="Group name…" maxlength="40"
+              onkeydown="if(event.key==='Enter'){saveTagGroup()}else if(event.key==='Escape'){cancelTagGroupNaming()}" />
+            <button class="tg-form-btn save" onclick="saveTagGroup()" title="Save group">&#x2713;</button>
+            <button class="tg-form-btn cancel" onclick="cancelTagGroupNaming()" title="Cancel">&#x2715;</button>
+          </div>`;
+        } else {
+          html += `<button class="sb-btn sb-save-group" onclick="startTagGroupNaming()" title="Save the ${projectFilterTags.length} selected tag${projectFilterTags.length > 1 ? 's' : ''} as a reusable group">&#x1F4BE; Save as group</button>`;
+        }
+        html += `<button class="sb-btn sb-clear-tags" onclick="clearProjectTags()" title="Clear tag filters">&#x2715; Clear ${projectFilterTags.length} tag${projectFilterTags.length > 1 ? 's' : ''}</button>`;
+      }
+    }
+  }
 
   html += '<div class="sec" style="margin-top:12px">Trash</div>';
   html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
@@ -1049,13 +1112,7 @@ function getFilteredGeneral() {
     filtered = filtered.filter((c) => aiMatchedIds.includes(c.id));
   } else if (searchQuery) {
     const q = searchQuery.toLowerCase();
-    filtered = filtered.filter((c) =>
-      (c.comment || '').toLowerCase().includes(q) ||
-      (c.category || '').toLowerCase().includes(q) ||
-      (c.tags || []).some((t) => t.toLowerCase().includes(q)) ||
-      (c.aiSummary || '').toLowerCase().includes(q) ||
-      (c.comments || []).some((x) => x.text.toLowerCase().includes(q))
-    );
+    filtered = filtered.filter((c) => clipMatchesQuery(c, q));
   }
   // Tag filter
   if (filterTag) {
@@ -1088,6 +1145,90 @@ function setStatus(status) {
 
 function setTag(tag) {
   filterTag = tag;
+  renderAll();
+}
+
+// Project detail: toggle a tag in the multi-select filter.
+function toggleProjectTag(tag) {
+  const i = projectFilterTags.indexOf(tag);
+  if (i === -1) projectFilterTags.push(tag);
+  else projectFilterTags.splice(i, 1);
+  if (projectFilterTags.length === 0) tagGroupNaming = false;
+  renderAll();
+}
+
+function clearProjectTags() {
+  if (projectFilterTags.length === 0) return;
+  projectFilterTags = [];
+  tagGroupNaming = false;
+  renderAll();
+}
+
+// Any (OR) vs All (AND) matching for the selected tags. Persisted globally.
+function setTagMatchMode(mode) {
+  if (mode !== 'any' && mode !== 'all') return;
+  if (projectTagMatchMode === mode) return;
+  projectTagMatchMode = mode;
+  settings.tag_match_mode = mode;
+  window.quickclip.saveSetting('tag_match_mode', mode).catch(() => {});
+  renderAll();
+}
+
+// ── Tag Groups: named, saved sets of tags scoped to a project ──
+
+function getProjectTagGroups(projectId) {
+  const all = (settings && settings.tag_groups) || {};
+  return Array.isArray(all[projectId]) ? all[projectId] : [];
+}
+
+async function saveProjectTagGroups(projectId, groups) {
+  const all = (settings && settings.tag_groups) ? { ...settings.tag_groups } : {};
+  if (groups.length) all[projectId] = groups;
+  else delete all[projectId];
+  settings.tag_groups = all;
+  try { await window.quickclip.saveSetting('tag_groups', all); }
+  catch (e) { console.error('[tag-groups] save failed', e); }
+}
+
+function startTagGroupNaming() {
+  if (!projectFilterTags.length) return;
+  tagGroupNaming = true;
+  renderAll();
+  const inp = document.getElementById('tagGroupNameInput');
+  if (inp) { inp.focus(); inp.select(); }
+}
+
+function cancelTagGroupNaming() {
+  tagGroupNaming = false;
+  renderAll();
+}
+
+async function saveTagGroup() {
+  const inp = document.getElementById('tagGroupNameInput');
+  const name = (inp && inp.value || '').trim();
+  if (!name || !projectFilterTags.length) { tagGroupNaming = false; renderAll(); return; }
+  const groups = getProjectTagGroups(selectedProjectId).slice();
+  // Update in place if a group with this name already exists, else append.
+  const existing = groups.findIndex((g) => g.name.toLowerCase() === name.toLowerCase());
+  const entry = { id: existing !== -1 ? groups[existing].id : 'g' + Date.now(), name, tags: [...projectFilterTags] };
+  if (existing !== -1) groups[existing] = entry; else groups.push(entry);
+  await saveProjectTagGroups(selectedProjectId, groups);
+  tagGroupNaming = false;
+  renderAll();
+}
+
+// Applying a group replaces the current tag selection with the group's tags.
+function applyTagGroup(groupId) {
+  const g = getProjectTagGroups(selectedProjectId).find((x) => x.id === groupId);
+  if (!g) return;
+  projectFilterTags = [...g.tags];
+  tagGroupNaming = false;
+  renderAll();
+}
+
+async function deleteTagGroup(groupId) {
+  const groups = getProjectTagGroups(selectedProjectId).filter((x) => x.id !== groupId);
+  await saveProjectTagGroups(selectedProjectId, groups);
   renderAll();
 }
 
@@ -1253,6 +1394,7 @@ function renderProjectDetail(el) {
   }
 
   let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
+  const totalInProject = projectClips.length;
   const completedCount = projectClips.filter((c) => c.completedAt).length;
   if (hideCompleted) {
     projectClips = projectClips.filter((c) => !c.completedAt);
@@ -1340,15 +1482,32 @@ function renderProjectDetail(el) {
     html += `<div class="project-ide-label">${esc(proj.ide)}</div>`;
   }
 
+  // Final list = the same filter chain the search box uses (single source of
+  // truth). The staged filtering above is only kept for the count badges.
+  projectClips = getFilteredProjectClips();
+
   html += `<div class="search-bar" style="margin-top:12px">
-    <input id="projectSearchInput" placeholder="Search in project..."
+    <input id="projectSearchInput" value="${escAttr(projectSearchQuery)}" placeholder="Search in project..."
       onkeydown="if(event.key==='Enter')searchProject()" oninput="searchProject()" />
   </div>`;
 
+  if (projectFilterTags.length) {
+    const joiner = projectFilterTags.length > 1
+      ? `<span class="tag-join">${projectTagMatchMode === 'all' ? 'all of' : 'any of'}</span>` : '';
+    html += `<div class="active-tag-filters">Filtering by ${joiner}${projectFilterTags.map((t) =>
+      `<span class="tag" onclick="toggleProjectTag('${escAttr(t)}')" title="Remove #${escAttr(t)} filter">#${esc(t)} &times;</span>`).join('')}</div>`;
+  }
+
   if (projectClips.length === 0) {
-    html += `<div class="empty"><div class="ico">&#x1F4DD;</div>
-      <div class="empty-title">No clips in this project</div>
-      <div class="empty-sub">Assign clips from General Notes or capture new ones</div></div>`;
+    if (totalInProject === 0) {
+      html += `<div class="empty"><div class="ico">&#x1F4DD;</div>
+        <div class="empty-title">No clips in this project</div>
+        <div class="empty-sub">Assign clips from General Notes or capture new ones</div></div>`;
+    } else {
+      html += `<div class="empty"><div class="ico">&#x1F50D;</div>
+        <div class="empty-title">No matching notes</div>
+        <div class="empty-sub">No notes match the current tag or search filters</div></div>`;
+    }
   } else {
     try {
       const tags = getAllKnownTags();
@@ -1384,30 +1543,17 @@ function searchProject() {
 function _doSearchProject() {
   const input = document.getElementById('projectSearchInput');
   if (!input) return;
-  const q = input.value.trim().toLowerCase();
+  projectSearchQuery = input.value.trim();
   const el = document.getElementById('mainArea');
-  // Re-render with filter (simple approach: re-render all)
-  const proj = projects.find((p) => p.id === selectedProjectId);
-  if (!proj) return;
+  if (!projects.find((p) => p.id === selectedProjectId)) return;
 
-  let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
-  if (q) {
-    projectClips = projectClips.filter((c) =>
-      (c.comment || '').toLowerCase().includes(q) ||
-      (c.category || '').toLowerCase().includes(q) ||
-      (c.tags || []).some((t) => t.toLowerCase().includes(q)) ||
-      (c.aiSummary || '').toLowerCase().includes(q) ||
-      (c.comments || []).some((x) => x.text.toLowerCase().includes(q))
-    );
-  }
-
+  // Incremental re-render of just the clip list — the search input keeps focus
+  // because its DOM node is left untouched. Same filter chain as the full render.
+  const projectClips = getFilteredProjectClips();
   const clipListHtml = projectClips.length > 0
     ? projectClips.map((c) => renderClipCard(c, true, getAllKnownTags())).join('')
-    : `<div class="empty"><div class="empty-title">No matches</div></div>`;
+    : `<div class="empty"><div class="empty-title">No matching notes</div></div>`;
 
-  // Replace clip list only (find after search-bar)
-  const searchBarEnd = el.innerHTML.lastIndexOf('</div><!--cliplist-->');
-  // Simpler approach: just rebuild the clip area
   const container = el.querySelectorAll('.clip, .empty');
   container.forEach((node) => node.remove());
 
@@ -1415,6 +1561,34 @@ function _doSearchProject() {
   wrapper.innerHTML = clipListHtml;
   while (wrapper.firstChild) el.appendChild(wrapper.firstChild);
   loadDiskImages(el);
+}
+
+// Single source of truth for the open project's visible clips: applies the
+// completed / prompt / dev-mode / tag / search filters in order. Used by both
+// renderProjectDetail (full render) and _doSearchProject (incremental render).
+function getFilteredProjectClips() {
+  let list = clips.filter((c) => c.project_id === selectedProjectId);
+  if (hideCompleted) list = list.filter((c) => !c.completedAt);
+  if (promptFilter === 'with-prompt') list = list.filter((c) => c.aiFixPrompt);
+  else if (promptFilter === 'no-prompt') list = list.filter((c) => !c.aiFixPrompt);
+  if (isDevMode && devFilter !== 'all') {
+    if (devFilter === 'pending') list = list.filter((c) => !c.sentToIdeAt || !c.completedAt);
+    else if (devFilter === 'done') list = list.filter((c) => c.completedAt);
+  }
+  if (projectFilterTags.length) {
+    if (projectTagMatchMode === 'all') {
+      // AND: clip must carry every selected tag
+      list = list.filter((c) => projectFilterTags.every((t) => (c.tags || []).includes(t)));
+    } else {
+      // OR: clip carries any selected tag
+      list = list.filter((c) => (c.tags || []).some((t) => projectFilterTags.includes(t)));
+    }
+  }
+  if (projectSearchQuery) {
+    const q = projectSearchQuery.toLowerCase();
+    list = list.filter((c) => clipMatchesQuery(c, q));
+  }
+  return list;
 }
 
 function toggleCompleted() {
@@ -1435,6 +1609,9 @@ async function selectProject(id) {
   selectedClipIds.clear();
   devFilter = 'all';
   projectDetailTab = 'notes';
+  projectFilterTags = [];
+  projectSearchQuery = '';
+  tagGroupNaming = false;
   // Sync active project setting in focused mode
   if (isFocusedMode && id !== null) {
     window.quickclip.setFocusedActiveProject(id);
@@ -2283,6 +2460,15 @@ function getAllKnownTags() {
     if (cl.tags && cl.tags.length) cl.tags.forEach(t => tagSet.add(t));
   }
   return Array.from(tagSet).sort();
+}
+
+// Shared free-text search predicate — q must already be lower-cased.
+function clipMatchesQuery(c, q) {
+  return (c.comment || '').toLowerCase().includes(q) ||
+    (c.category || '').toLowerCase().includes(q) ||
+    (c.tags || []).some((t) => t.toLowerCase().includes(q)) ||
+    (c.aiSummary || '').toLowerCase().includes(q) ||
+    (c.comments || []).some((x) => x.text.toLowerCase().includes(q));
 }
 
 function renderClipCard(c, inProject, allKnownTags) {

@@ -308,6 +308,7 @@ async function createMainWindow() {
   const windowSize = mode === 'focused' ? { width: 900, height: 700 } : { width: 1100, height: 750 };
   mainWindow = new BrowserWindow({
     width: windowSize.width, height: windowSize.height, show: false,
+    minWidth: 720, minHeight: 480,
     title: 'HuminLoop',
     backgroundColor: '#13131f',
     webPreferences: {
@@ -332,6 +333,15 @@ async function createMainWindow() {
       mainWindow.hide();
     }
   });
+  // WSLg/Linux compositors sometimes mis-report the work area on maximize, leaving the window
+  // covering only a fraction of the screen with unresponsive native decorations. Force-fit instead.
+  if (process.platform === 'linux') {
+    mainWindow.on('maximize', () => {
+      const display = screen.getDisplayMatching(mainWindow.getBounds());
+      mainWindow.unmaximize();
+      mainWindow.setBounds(display.workArea);
+    });
+  }
 }
 
 // Work area of the display where the screenshot was just taken. We use the

@@ -18,6 +18,7 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "build:mac": "electron-builder --mac",
+    "build:choose": "bash scripts/build.sh",
     "pack": "electron-builder --dir",
     "postinstall": "electron-builder install-app-deps"
   },

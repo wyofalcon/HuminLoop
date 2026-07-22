@@ -58,8 +58,6 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 .header-left {
@@ -213,6 +211,120 @@ body {
   justify-content: center;
 }
 .sb-btn.sb-add:hover { background: #3b82f611; }
+
+.sb-btn.sb-clear-tags {
+  color: var(--text-dim);
+  justify-content: center;
+  font-size: 11px;
+  margin-top: 4px;
+}
+.sb-btn.sb-clear-tags:hover { color: var(--danger); background: var(--bg-hover); }
+
+/* Active tag-filter chips shown above the project clip list */
+.active-tag-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 2px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.active-tag-filters .tag {
+  cursor: pointer;
+  background: #4f8ff722;
+  color: var(--accent-blue);
+}
+.active-tag-filters .tag:hover { background: #ef444422; color: #ef4444; }
+.active-tag-filters .tag-join {
+  font-style: italic;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+
+/* Tags section header with the Any/All (OR/AND) match-mode toggle */
+.sidebar .sec.tags-sec {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tag-mode {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+.tag-mode .tmode {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 1px 7px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.tag-mode .tmode:hover { color: var(--text-primary); }
+.tag-mode .tmode.active { background: #4f8ff733; color: var(--accent-blue); font-weight: 600; }
+
+/* Saved tag-group buttons */
+.sb-btn.tag-group-btn .tg-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-btn.tag-group-btn .tg-right { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.tg-del {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.5;
+  border-radius: 3px;
+}
+.sb-btn.tag-group-btn:hover .tg-del { opacity: 0.9; }
+.tg-del:hover { color: var(--danger); opacity: 1; }
+
+.sb-btn.sb-save-group {
+  color: var(--accent-blue);
+  justify-content: center;
+  font-size: 11px;
+  margin-top: 4px;
+  border: 1px dashed var(--border-mid);
+}
+.sb-btn.sb-save-group:hover { background: #3b82f611; }
+
+/* Inline "name this group" form */
+.tag-group-form {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.tag-group-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border: 1px solid var(--accent-blue);
+  border-radius: var(--radius-sm);
+}
+.tag-group-input:focus { outline: none; }
+.tg-form-btn {
+  border: none;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1;
+}
+.tg-form-btn.save:hover { color: #34d399; background: #34d39922; }
+.tg-form-btn.cancel:hover { color: var(--danger); background: #ef444422; }
 
 .sb-select {
   width: 100%;

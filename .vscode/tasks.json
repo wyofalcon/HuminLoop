@@ -72,6 +72,35 @@
       ],
       "problemMatcher": [],
       "detail": "Clean restart: stop all instances, then launch with DevTools."
+    },
+    {
+      "label": "HuminLoop: Build installer (choose OS)",
+      "type": "shell",
+      "command": "bash scripts/build.sh ${input:buildTarget}",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "group": "build",
+      "detail": "Build the latest HuminLoop installer with electron-builder. Prompts for target OS (Auto/Linux/Windows/macOS). Notes live in Postgres and are untouched."
+    }
+  ],
+  "inputs": [
+    {
+      "id": "buildTarget",
+      "type": "pickString",
+      "description": "Build HuminLoop installer for which OS?",
+      "options": [
+        { "label": "Auto — detect this machine's OS", "value": "auto" },
+        { "label": "Linux — AppImage + .deb", "value": "linux" },
+        { "label": "Windows — NSIS .exe (needs Windows or Wine)", "value": "win" },
+        { "label": "macOS — .dmg (needs macOS)", "value": "mac" }
+      ],
+      "default": "auto"
     }
   ]
 }

@@ -91,6 +91,35 @@ async function runMigrations() {
     `ALTER TABLE projects ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ DEFAULT NULL`,
     `ALTER TABLE clips DROP CONSTRAINT IF EXISTS clips_source_check`,
     `ALTER TABLE clips ADD CONSTRAINT clips_source_check CHECK (source IN ('full', 'focused'))`,
+    `CREATE TABLE IF NOT EXISTS demos (
+       id                  VARCHAR(20) PRIMARY KEY,
+       project_id          INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+       title               TEXT DEFAULT '',
+       description         TEXT DEFAULT '',
+       video_path          TEXT DEFAULT NULL,
+       audio_original_path TEXT DEFAULT NULL,
+       audio_dubbed_path   TEXT DEFAULT NULL,
+       poster_path         TEXT DEFAULT NULL,
+       transcript          JSONB DEFAULT NULL,
+       script              JSONB DEFAULT NULL,
+       markers             JSONB NOT NULL DEFAULT '[]',
+       speech_segments     JSONB NOT NULL DEFAULT '[]',
+       activity_log        JSONB DEFAULT NULL,
+       duration_ms         INTEGER NOT NULL DEFAULT 0,
+       has_audio           BOOLEAN NOT NULL DEFAULT FALSE,
+       audio_mode          VARCHAR(10) NOT NULL DEFAULT 'original',
+       source_type         VARCHAR(10) NOT NULL DEFAULT 'screen',
+       mime                VARCHAR(50) DEFAULT 'video/webm',
+       deleted_at          TIMESTAMPTZ DEFAULT NULL,
+       created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_demos_project ON demos(project_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_demos_deleted ON demos(deleted_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_demos_created ON demos(created_at DESC)`,
+    `ALTER TABLE demos ADD COLUMN IF NOT EXISTS script JSONB DEFAULT NULL`,
+    `ALTER TABLE demos ADD COLUMN IF NOT EXISTS speech_segments JSONB NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE demos ADD COLUMN IF NOT EXISTS activity_log JSONB DEFAULT NULL`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }
@@ -363,6 +392,144 @@ async function migrateArchivedToTrash() {
 }
 
 // ---------------------------------------------------------------------------
+// Demos (screen recordings + AI transcript / dubbing)
+// ---------------------------------------------------------------------------
+
+const DEMOS_BASE_QUERY = `
+  SELECT d.id, d.project_id, p.name AS "projectName",
+         d.title, d.description,
+         d.video_path AS "videoPath",
+         d.audio_original_path AS "audioOriginalPath",
+         d.audio_dubbed_path AS "audioDubbedPath",
+         d.poster_path AS "posterPath",
+         d.transcript, d.script, d.markers,
+         d.speech_segments AS "speechSegments",
+         d.activity_log AS "activityLog",
+         d.duration_ms AS "durationMs",
+         d.has_audio AS "hasAudio",
+         d.audio_mode AS "audioMode",
+         d.source_type AS "sourceType",
+         d.mime,
+         d.deleted_at AS "deletedAt",
+         d.created_at AS "createdAt",
+         d.updated_at AS "updatedAt"
+  FROM demos d
+  LEFT JOIN projects p ON d.project_id = p.id
+`;
+
+async function getDemos(projectId) {
+  const conditions = ['d.deleted_at IS NULL'];
+  const params = [];
+  if (projectId === null) {
+    conditions.push('d.project_id IS NULL');
+  } else if (projectId !== undefined) {
+    params.push(projectId);
+    conditions.push(`d.project_id = $${params.length}`);
+  }
+  const { rows } = await pool.query(
+    DEMOS_BASE_QUERY + ' WHERE ' + conditions.join(' AND ') + ' ORDER BY d.created_at DESC',
+    params
+  );
+  return rows;
+}
+
+async function getDemo(id) {
+  const { rows } = await pool.query(DEMOS_BASE_QUERY + ' WHERE d.id = $1', [id]);
+  return rows[0] || null;
+}
+
+async function saveDemo(demo) {
+  await pool.query(
+    `INSERT INTO demos (id, project_id, title, description, video_path, audio_original_path, audio_dubbed_path, poster_path, transcript, markers, speech_segments, activity_log, duration_ms, has_audio, audio_mode, source_type, mime)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+    [
+      demo.id,
+      demo.project_id || null,
+      demo.title || '',
+      demo.description || '',
+      demo.video_path || null,
+      demo.audio_original_path || null,
+      demo.audio_dubbed_path || null,
+      demo.poster_path || null,
+      demo.transcript ? JSON.stringify(demo.transcript) : null,
+      JSON.stringify(demo.markers || []),
+      JSON.stringify(demo.speech_segments || []),
+      demo.activity_log ? JSON.stringify(demo.activity_log) : null,
+      demo.duration_ms || 0,
+      !!demo.has_audio,
+      demo.audio_mode || 'original',
+      demo.source_type || 'screen',
+      demo.mime || 'video/webm',
+    ]
+  );
+  return true;
+}
+
+// Columns that map 1:1 from an update key to a plain scalar column.
+const DEMO_UPDATE_COLUMNS = {
+  title: 'title', description: 'description',
+  video_path: 'video_path', audio_original_path: 'audio_original_path',
+  audio_dubbed_path: 'audio_dubbed_path', poster_path: 'poster_path',
+  duration_ms: 'duration_ms', audio_mode: 'audio_mode',
+  source_type: 'source_type', mime: 'mime', project_id: 'project_id',
+};
+
+async function updateDemo(id, updates) {
+  const setClauses = [];
+  const params = [];
+  let idx = 1;
+  for (const [key, val] of Object.entries(updates)) {
+    if (key === 'transcript' || key === 'script' || key === 'activity_log') {
+      setClauses.push(`${key} = $${idx++}`);
+      params.push(val == null ? null : JSON.stringify(val));
+    } else if (key === 'markers' || key === 'speech_segments') {
+      setClauses.push(`${key} = $${idx++}`);
+      params.push(JSON.stringify(val || []));
+    } else if (key === 'has_audio') {
+      setClauses.push(`has_audio = $${idx++}`);
+      params.push(!!val);
+    } else if (DEMO_UPDATE_COLUMNS[key]) {
+      setClauses.push(`${DEMO_UPDATE_COLUMNS[key]} = $${idx++}`);
+      params.push(val);
+    }
+  }
+  if (setClauses.length === 0) return false;
+  setClauses.push(`updated_at = NOW()`);
+  params.push(id);
+  await pool.query(`UPDATE demos SET ${setClauses.join(', ')} WHERE id = $${idx}`, params);
+  return true;
+}
+
+async function deleteDemo(id) {
+  await pool.query('UPDATE demos SET deleted_at = NOW() WHERE id = $1', [id]);
+  return true;
+}
+
+async function restoreDemo(id) {
+  await pool.query('UPDATE demos SET deleted_at = NULL WHERE id = $1', [id]);
+  return true;
+}
+
+async function permanentDeleteDemo(id) {
+  await pool.query('DELETE FROM demos WHERE id = $1', [id]);
+  return true;
+}
+
+async function getDemoTrash() {
+  const { rows } = await pool.query(DEMOS_BASE_QUERY + ' WHERE d.deleted_at IS NOT NULL ORDER BY d.deleted_at DESC');
+  return rows;
+}
+
+// Returns the ids of purged demos so the caller can delete their media folders.
+async function purgeDemoTrash(olderThanDays = 30) {
+  const { rows } = await pool.query(
+    `DELETE FROM demos WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '1 day' * $1 RETURNING id`,
+    [olderThanDays]
+  );
+  return rows.map(r => r.id);
+}
+
+// ---------------------------------------------------------------------------
 // Comments
 // ---------------------------------------------------------------------------
 
@@ -433,8 +600,9 @@ async function updateProject(id, data) {
 }
 
 async function deleteProject(id) {
-  // Clips get project_id = NULL (move to General Notes)
+  // Clips and demos get project_id = NULL (move to General / unassigned)
   await pool.query('UPDATE clips SET project_id = NULL WHERE project_id = $1', [id]);
+  await pool.query('UPDATE demos SET project_id = NULL WHERE project_id = $1', [id]);
   await pool.query('DELETE FROM projects WHERE id = $1', [id]);
   return true;
 }
@@ -586,6 +754,16 @@ module.exports = {
   permanentDeleteClip,
   getTrash,
   purgeTrash,
+  // Demos
+  getDemos,
+  getDemo,
+  saveDemo,
+  updateDemo,
+  deleteDemo,
+  restoreDemo,
+  permanentDeleteDemo,
+  getDemoTrash,
+  purgeDemoTrash,
   // Categories
   getCategories,
   getCategoryId,

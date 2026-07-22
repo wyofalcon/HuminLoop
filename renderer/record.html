@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+<title>HuminLoop — Record Demo</title>
+<link rel="stylesheet" href="record.css">
+</head><body>
+<div class="rec-window">
+  <div class="rec-header drag">
+    <span class="rec-title">&#x1F3AC; Record Demo</span>
+    <button class="rec-x nd" onclick="closeRecorder()" title="Close">&#x2715;</button>
+  </div>
+
+  <!-- SETUP -->
+  <div id="setupView" class="rec-body">
+    <label class="rec-label">Project</label>
+    <select id="projectSelect" class="rec-select"></select>
+
+    <label class="rec-label">What to record</label>
+    <div id="sourceError" class="rec-error" style="display:none"></div>
+    <div class="rec-sources">
+      <div class="rec-source-group">
+        <div class="rec-group-title">Entire screen</div>
+        <div id="screenSources" class="rec-source-grid"></div>
+      </div>
+      <div class="rec-source-group">
+        <div class="rec-group-title">A single app window</div>
+        <div id="windowSources" class="rec-source-grid"></div>
+      </div>
+    </div>
+
+    <label class="rec-check">
+      <input type="checkbox" id="micToggle" checked />
+      <span>Record microphone &mdash; narrate what you're doing</span>
+    </label>
+
+    <div class="rec-actions">
+      <button class="rec-btn ghost nd" onclick="closeRecorder()">Cancel</button>
+      <button id="startBtn" class="rec-btn primary nd" onclick="startRecording()" disabled>Start Recording</button>
+    </div>
+  </div>
+
+  <!-- RECORDING -->
+  <div id="recordingView" class="rec-body" style="display:none">
+    <div class="rec-live">
+      <span class="rec-dot"></span>
+      <span id="timer" class="rec-timer">00:00</span>
+      <span id="speechIndicator" class="rec-speech" title="Detected narration — these moments will be highlighted on the playback timeline">&#x1F399; silent</span>
+    </div>
+    <div class="rec-marker-row">
+      <button class="rec-btn marker nd" onclick="dropMarker()">&#x1F6A9; Add Marker</button>
+      <span class="rec-marker-count" id="markerCount">0 markers</span>
+    </div>
+    <div id="markerHint" class="rec-hint"></div>
+    <div class="rec-actions">
+      <button class="rec-btn ghost nd" onclick="discardRecording()">Discard</button>
+      <button class="rec-btn stop nd" onclick="stopAndSave()">&#x23F9; Stop &amp; Save</button>
+    </div>
+  </div>
+
+  <!-- SAVED -->
+  <div id="savedView" class="rec-body" style="display:none">
+    <div class="rec-saved-icon">&#x2705;</div>
+    <div class="rec-saved-title">Demo saved</div>
+    <div id="savedMsg" class="rec-hint"></div>
+    <div class="rec-actions" style="flex-direction:column;gap:8px">
+      <button id="transcribeBtn" class="rec-btn primary nd" onclick="transcribeNow()">&#x2728; Let AI clean up the narration</button>
+      <button class="rec-btn ghost nd" onclick="finishAndOpen()">Done &mdash; open HuminLoop</button>
+    </div>
+  </div>
+</div>
+<script src="record.js"></script>
+</body></html>

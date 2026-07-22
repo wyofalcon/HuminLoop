@@ -75,6 +75,7 @@ Renderer (5 windows + 2 overlays)   Main Process (src/main.js)
                                      api-server.js → REST API for external tools
                                      window-info.js → Win32/xdotool/gdbus
                                      images.js → disk storage + compression
+                                     media.js → demo video/audio disk storage (streaming)
                                      workflow-context.js → reads SESSION.md/AUDIT_LOG.md
 
 MCP Server (mcp-server/)       Workflow System (workflow/)
@@ -128,6 +129,21 @@ Floating annotation toolbar + fullscreen transparent overlay for drawing on scre
 3. IDE agent calls MCP `get_pending_prompt` tool → reads prompt + image → files are deleted (one-shot delivery)
 4. Agent receives prompt text + screenshot as MCP content blocks and can act on it immediately
 
+### Project Demos
+
+Per-project screen recordings with AI narration cleanup. Full design in [docs/DEMOS.md](docs/DEMOS.md).
+
+- **Recorder** (`renderer/record.*`) — dedicated always-on-top renderer; `MediaRecorder`/`getUserMedia` are DOM-only, so capture runs here. `desktopCapturer` (main-only) supplies the screen/window source list for "record app vs whole screen". Two `MediaRecorder`s: combined video+mic (`video.webm`, for playback) and mic-only (`audio-original.webm`, small, for transcription). Chunks stream over IPC to disk. A WebAudio **VAD** samples mic RMS while recording and produces `speech_segments` (narrated stretches, in seconds) with a live 🎙 indicator.
+- **Activity tracker** (main) — while a demo records, polls the focused window (async `getActiveWindowAsync()`, 1.5s — the sync variant would block the event loop) and cursor travel (`screen.getCursorScreenPoint()`, 250ms → 5s buckets) into `activity_log`. No global click/keystroke hook (Electron limitation; `uiohook-napi` is the future path).
+- **`media` module** (`src/media.js`) — path-based on-disk storage under `{userData}/demos/{id}/` with **streaming writers** (never base64-round-trips video, unlike `images.js`). Write streams carry `'error'` handlers (an unhandled stream error would kill the main process); read paths never `mkdir`. Also holds the self-dub writer, `pcmToWav()` for TTS output, and a path-traversal guard.
+- **`demos` table** — both backends + `db.js` passthroughs; schema in `db-sqlite.js` SCHEMA + migrations, `db-pg.js` runMigrations (existing pg), and `docker/init.sql` (fresh pg). Columns include `transcript`, `script` (polished voice-over), `markers`, `speech_segments`, `activity_log`. Soft-delete/trash with 30-day purge that also deletes files; restorable from the Demos tab's Trash section. `deleteProject()` nulls demo `project_id` in both backends. sqlite timestamps are normalized to ISO-8601 UTC in `parseDemoRow` (raw `datetime('now')` strings parse as local time in Chromium).
+- **Permissions** — `configureMediaPermissions()` in main registers `setPermissionRequestHandler` + `setDisplayMediaRequestHandler`, scoped to media/display-capture permissions only. Recorder window uses `setContentProtection(true)` to stay out of full-screen captures.
+- **Markers** — global hotkey (`MARKER_HOTKEY`, default `Ctrl+Shift+M`) registered only while recording; relayed to the recorder to timestamp a moment.
+- **AI** — `ai.generateDemoTranscript()` (Gemini 2.5 Flash audio input; `callGemini` takes `model`/`generationConfig`/`timeoutMs`/`wantAudio` overrides), `ai.generateDemoScript()` (transcript + activity metadata → polished voice-over script), and `ai.synthesizeDemoDub()` (experimental Gemini TTS; reads `script` when present).
+- **Dubbing** — two paths sharing the demo's dub slot: AI TTS (`audio-dubbed.wav`) or **self-dub** (`audio-dubbed.webm`) recorded in the viewer over muted playback via `demo-dub-begin/chunk/finish/cancel`. `audio_mode` picks the playback track; dubbed playback mutes the `<video>` and syncs a hidden `<audio>` to it.
+- **Playback** — served via the local HTTP API with **Range** support incl. suffix ranges (`GET /api/demos/:id/{video,audio,poster}`), streamed via `stream.pipeline` (destroys the read stream on client disconnect — `<video>` seeking aborts a request per seek). Viewer CSP extended with `media-src`/`img-src http://127.0.0.1:*`.
+- **Viewer** — Demos sub-tab in project detail (shares `renderProjectTabStrip()` with Notes/Workflow); inline `<video>` with a clickable **timeline reel** (speech highlights + marker pins + playhead), clickable transcript/script segments that seek the video, dub controls, and a collapsible Trash. Playback position survives `renderAll()` re-renders (`_demoPlayState` + `wireDemoPlayers()`).
+
 ### IPC Pattern
 
 All renderer↔main communication goes through `preload.js` which exposes `window.quickclip.*` (~50 methods). Context isolation is enforced — no `nodeIntegration`.
@@ -151,6 +167,14 @@ REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatic
   - `/api/clips/:id/restore` — POST restore from trash
   - `/api/clips/:id/permanent` — DELETE permanent deletion
   - `/api/projects` — GET list, POST create
+  - `/api/demos` — GET list (`?project_id=` / `?unassigned=true`)
+  - `/api/demos/trash` — GET trashed demos
+  - `/api/demos/:id` — GET read, PATCH update (title/description/audio_mode), DELETE soft-delete
+  - `/api/demos/:id/restore` — POST restore from trash
+  - `/api/demos/:id/permanent` — DELETE row + media files
+  - `/api/demos/:id/video` — GET range-streamed video (playback + seeking)
+  - `/api/demos/:id/audio` — GET range-streamed audio (`?which=original|dubbed`)
+  - `/api/demos/:id/poster` — GET thumbnail PNG
   - `/api/categories` — GET list
   - `/api/settings` — GET read, PATCH update
   - `/api/ai/search` — POST semantic search
@@ -170,8 +194,8 @@ REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatic
 
 Separate Node.js process (stdio transport) that bridges AI IDE agents to HuminLoop via the HTTP API. Has its own `package.json` with `@modelcontextprotocol/sdk` dependency.
 
-**Tools (19 total):**
-- **Knowledge:** `clip_list`, `clip_get`, `clip_create`, `clip_update`, `clip_delete`, `clip_complete`, `clip_search`, `clip_summarize`, `project_list`, `project_get`, `project_create`, `category_list`, `huminloop_health` — proxy to HTTP API
+**Tools (21 total):**
+- **Knowledge:** `clip_list`, `clip_get`, `clip_create`, `clip_update`, `clip_delete`, `clip_complete`, `clip_search`, `clip_summarize`, `project_list`, `project_get`, `project_create`, `category_list`, `demo_list`, `demo_get`, `huminloop_health` — proxy to HTTP API
 - **Workflow:** `session_context`, `session_read`, `git_status` — run locally via `child_process`
 - **IDE Bridge:** `project_match` (auto-match workspace to HuminLoop project + return workflow context), `get_pending_prompt` (read staged IDE_PROMPT.md + image, one-shot delivery), `clip_get_prompt` (fetch clip prompt + optional image on-demand)
 
@@ -306,6 +330,7 @@ Use these labels when discussing parts of the system. They are the canonical sho
 | `focused-capture` | Focused capture popup | `renderer/focused-capture.*` |
 | `toolbar` | Floating annotation toolbar | `renderer/toolbar.*` |
 | `overlay` | Fullscreen draw/text overlay | `renderer/overlay.*` |
+| `record` | Demo screen-recorder control panel | `renderer/record.*` |
 | `wizard` | First-run setup window | `renderer/setup.*` |
 | `preload` | IPC context bridge | `src/preload.js` |
 
@@ -320,6 +345,7 @@ Use these labels when discussing parts of the system. They are the canonical sho
 | `rules` | Categorization engine | `src/rules.js` |
 | `wininfo` | Window metadata capture | `src/window-info.js` |
 | `images` | Disk image storage | `src/images.js` |
+| `media` | Disk demo video/audio storage + streaming writers + PCM→WAV | `src/media.js` |
 | `wf-context` | Workflow context reader | `src/workflow-context.js` |
 
 **External interfaces:**
@@ -353,6 +379,7 @@ Use these labels when discussing parts of the system. They are the canonical sho
 | `source` | Clip origin flag: `'full'` or `'focused'` |
 | `active-in-ide` | Project flag indicating it's open in user's IDE |
 | `focused-prompt` | AI-generated coding prompt from annotated screenshot |
+| `demo` | Screen recording (video + narration + markers + AI transcript) in a project's Demos tab |
 
 ## Key Conventions
 

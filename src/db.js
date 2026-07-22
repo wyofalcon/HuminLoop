@@ -72,6 +72,16 @@ module.exports = {
   permanentDeleteClip: (...a) => backend.permanentDeleteClip(...a),
   getTrash: (...a) => backend.getTrash(...a),
   purgeTrash: (...a) => backend.purgeTrash(...a),
+  // Demos
+  getDemos: (...a) => backend.getDemos(...a),
+  getDemo: (...a) => backend.getDemo(...a),
+  saveDemo: (...a) => backend.saveDemo(...a),
+  updateDemo: (...a) => backend.updateDemo(...a),
+  deleteDemo: (...a) => backend.deleteDemo(...a),
+  restoreDemo: (...a) => backend.restoreDemo(...a),
+  permanentDeleteDemo: (...a) => backend.permanentDeleteDemo(...a),
+  getDemoTrash: (...a) => backend.getDemoTrash(...a),
+  purgeDemoTrash: (...a) => backend.purgeDemoTrash(...a),
   // Categories
   getCategories: (...a) => backend.getCategories(...a),
   getCategoryName: (...a) => backend.getCategoryName(...a),

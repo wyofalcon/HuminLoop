@@ -9,6 +9,7 @@ let categories = [];
 let projects = [];
 let settings = {};
 let appVersion = null;
+let apiBase = 'http://127.0.0.1:7277'; // local HTTP API (media streaming); port refined at init
 
 // General Notes tab state
 let filterCat = 'All';
@@ -47,8 +48,18 @@ let workflowPrompts = [];
 let workflowAudits = null;
 let workflowSection = 'status';
 
-// Project detail sub-tab: 'notes' (clips) or 'workflow' (per-project AI dev workflow)
+// Project detail sub-tab: 'notes' (clips), 'demos' (recordings), or 'workflow'
 let projectDetailTab = 'notes';
+
+// Demos sub-tab state
+let projectDemos = [];
+let expandedDemoId = null; // which demo's <video> is currently open inline
+let demoTrash = [];        // trashed demos (all projects; filtered per project on render)
+let demoTrashOpen = false;
+let dubRecordingId = null; // demo id currently recording a self-dub (mic over muted playback)
+let _dubMicStream = null, _dubRecorder = null, _dubTail = Promise.resolve();
+let _demoPlayState = null;   // preserves <video> position across innerHTML re-renders
+let _demoAutoplayNext = null; // demo id that should start playing after the next render
 
 // ── Init ──
 
@@ -56,6 +67,7 @@ let projectDetailTab = 'notes';
   const hasKey = await window.quickclip.hasApiKey();
   if (!hasKey) document.getElementById('noKeyBanner').style.display = 'block';
   appVersion = await window.quickclip.getAppVersion();
+  if (appVersion && appVersion.apiPort) apiBase = `http://127.0.0.1:${appVersion.apiPort}`;
 
   // Check if we're in focused mode
   const mode = await window.quickclip.getAppMode();
@@ -165,6 +177,11 @@ function scheduleReload() {
 window.quickclip.onClipsChanged(() => scheduleReload());
 window.quickclip.onProjectsChanged(() => scheduleReload());
 window.quickclip.onPromptAutoCopied(() => showToast('Prompt copied to clipboard'));
+window.quickclip.onDemosChanged(() => {
+  if (activeTab === 'projects' && selectedProjectId && projectDetailTab === 'demos') {
+    loadDemosData(selectedProjectId).then(renderAll);
+  }
+});
 
 // ── Toast ──
 
@@ -761,13 +778,18 @@ function renderProjectDetailWorkflow(el, proj) {
       </span>
     </div>
   </div>`;
-  html += `<div class="project-tab-strip">
-    <button class="project-tab" onclick="setProjectDetailTab('notes')">Notes</button>
-    <button class="project-tab active">Workflow</button>
-  </div>`;
+  html += renderProjectTabStrip('workflow');
   html += `<div id="workflow-content"></div>`;
   el.innerHTML = html;
   renderWorkflowContent(document.getElementById('workflow-content'));
+}
+
+// Shared Notes / Demos / Workflow sub-tab strip (single source of truth —
+// previously duplicated across the Notes and Workflow project views).
+function renderProjectTabStrip(activeSubTab) {
+  const tab = (id, label) =>
+    `<button class="project-tab${activeSubTab === id ? ' active' : ''}" onclick="setProjectDetailTab('${id}')">${label}</button>`;
+  return `<div class="project-tab-strip">${tab('notes', 'Notes')}${tab('demos', 'Demos')}${tab('workflow', 'Workflow')}</div>`;
 }
 
 async function loadWorkflowData(projectId) {
@@ -807,9 +829,455 @@ function setProjectDetailTab(tab) {
   projectDetailTab = tab;
   if (tab === 'workflow' && selectedProjectId) {
     loadWorkflowData(selectedProjectId).then(renderAll);
+  } else if (tab === 'demos' && selectedProjectId) {
+    loadDemosData(selectedProjectId).then(renderAll);
   } else {
     renderAll();
   }
+}
+
+// =====================================================================
+//  DEMOS TAB
+// =====================================================================
+
+async function loadDemosData(projectId) {
+  if (!projectId) { projectDemos = []; demoTrash = []; return; }
+  try { projectDemos = await window.quickclip.getDemos(projectId); }
+  catch { projectDemos = []; }
+  try { demoTrash = await window.quickclip.getDemoTrash(); }
+  catch { demoTrash = []; }
+}
+
+function renderProjectDetailDemos(el, proj) {
+  // Preserve playback across re-renders — innerHTML tears the <video> down
+  // (e.g. background AI enrichment firing demos-changed mid-watch), so capture
+  // position/paused state here and restore it in wireDemoPlayers().
+  const prevVideo = el.querySelector('video[data-demo-video]');
+  if (prevVideo) {
+    _demoPlayState = { id: prevVideo.dataset.demoVideo, time: prevVideo.currentTime || 0, paused: prevVideo.paused };
+  }
+
+  let html = `<div class="project-detail-header">
+    <div>
+      <button class="back-btn" onclick="selectProject(null)">&larr; All Projects</button>
+      <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)}</h2>
+    </div>
+    <div class="project-detail-actions">
+      <button class="sb-btn-action" onclick="startNewDemo(${proj.id})" title="Record a new demo for this project">&#x1F3AC; New Demo</button>
+    </div>
+  </div>`;
+  html += renderProjectTabStrip('demos');
+
+  if (!projectDemos.length) {
+    html += `<div class="empty"><div class="ico">&#x1F3AC;</div>
+      <div class="empty-title">No demos yet</div>
+      <div class="empty-sub">Click &ldquo;New Demo&rdquo; to record your screen (and narrate it). Afterwards, AI can turn your narration into a clean script you can read back.</div></div>`;
+    html += renderDemoTrashSection(proj.id);
+    el.innerHTML = html;
+    return;
+  }
+
+  html += `<div class="demo-list">` + projectDemos.map(renderDemoCard).join('') + `</div>`;
+  html += renderDemoTrashSection(proj.id);
+  el.innerHTML = html;
+  wireDemoPlayers();
+}
+
+// Collapsible trash for this project's demos — restore or delete forever.
+function renderDemoTrashSection(projectId) {
+  const trash = demoTrash.filter((t) => t.project_id === projectId);
+  if (!trash.length) return '';
+  let html = `<div class="demo-trash">`;
+  html += `<button class="demo-trash-toggle" onclick="demoTrashOpen=!demoTrashOpen;renderAll()">`
+    + `${demoTrashOpen ? '&#x25BE;' : '&#x25B8;'} &#x1F5D1; Trash (${trash.length})</button>`;
+  if (demoTrashOpen) {
+    html += `<div class="demo-trash-list">`;
+    for (const t of trash) {
+      const tid = escAttr(t.id);
+      const deleted = new Date(t.deletedAt).getTime();
+      html += `<div class="demo-trash-row">
+        <span class="demo-trash-title">${esc(t.title || 'Untitled demo')}</span>
+        <span class="demo-badge">${fmtClock(t.durationMs)}</span>
+        <span class="demo-time">trashed ${timeAgo(isFinite(deleted) ? deleted : Date.now())}</span>
+        <button class="sb-btn-action" onclick="restoreDemoFromTrash('${tid}')" title="Restore this demo">&#x21A9; Restore</button>
+        <button class="del-btn" onclick="permanentDeleteDemoNow('${tid}')" title="Delete forever — removes the video files from disk">&#x2715;</button>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+async function restoreDemoFromTrash(id) {
+  await window.quickclip.restoreDemo(id);
+  await loadDemosData(selectedProjectId);
+  renderAll();
+  showToast('Demo restored');
+}
+
+async function permanentDeleteDemoNow(id) {
+  if (!confirm('Delete this demo forever? Its video and audio files will be removed from disk.')) return;
+  await window.quickclip.permanentDeleteDemo(id);
+  await loadDemosData(selectedProjectId);
+  renderAll();
+}
+
+function fmtClock(ms) {
+  const t = Math.max(0, Math.floor((ms || 0) / 1000));
+  const m = Math.floor(t / 60), s = t % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function renderDemoCard(d) {
+  const id = escAttr(d.id);
+  const title = d.title || 'Untitled demo';
+  const posterUrl = d.posterPath ? `${apiBase}/api/demos/${id}/poster` : '';
+  const videoUrl = `${apiBase}/api/demos/${id}/video`;
+  const isExpanded = expandedDemoId === d.id;
+  const t = d.transcript;
+  const hasTranscript = t && (t.plain || (t.segments && t.segments.length));
+  const script = d.script && (d.script.plain || (d.script.segments && d.script.segments.length)) ? d.script : null;
+  const created = new Date(d.createdAt).getTime();
+  // Route the video's sound through the dub track when one is active — but not
+  // while RE-recording a dub, when the old file is already gone.
+  const dubActive = d.audioMode === 'dubbed' && d.audioDubbedPath && dubRecordingId !== d.id;
+
+  let html = `<div class="demo-card" data-demo-id="${id}">`;
+
+  // Header
+  html += `<div class="demo-card-hdr">`;
+  html += `<div class="demo-title" id="dtitle-${id}" onclick="showDemoTitleInput('${id}')" title="Click to rename">${esc(title)}</div>`;
+  html += `<input class="demo-title-input" id="dtitle-in-${id}" style="display:none" value="${escAttr(title)}" `
+    + `onkeydown="if(event.key==='Enter')saveDemoTitle('${id}');if(event.key==='Escape')hideDemoTitleInput('${id}')" onblur="saveDemoTitle('${id}')" />`;
+  html += `<div class="demo-meta">`;
+  html += `<span class="demo-badge">${fmtClock(d.durationMs)}</span>`;
+  if (d.hasAudio) html += `<span class="demo-badge">&#x1F3A4;</span>`;
+  if (d.speechSegments && d.speechSegments.length) html += `<span class="demo-badge" title="${d.speechSegments.length} narrated stretch(es) — highlighted on the timeline">&#x1F399; ${d.speechSegments.length}</span>`;
+  if (d.markers && d.markers.length) html += `<span class="demo-badge" title="${d.markers.length} marker(s)">&#x1F6A9; ${d.markers.length}</span>`;
+  if (d.audioDubbedPath) html += `<span class="demo-badge" title="This demo has a dubbed narration track">&#x1F50A; dub</span>`;
+  html += `<span class="demo-time">${timeAgo(isFinite(created) ? created : Date.now())}</span>`;
+  html += `<button class="del-btn" onclick="removeDemo('${id}')" title="Move demo to trash">&#x2715;</button>`;
+  html += `</div></div>`;
+
+  // Player / poster
+  if (isExpanded) {
+    html += `<video class="demo-video" data-demo-video="${id}" src="${videoUrl}" controls preload="metadata"${dubActive ? ' muted' : ''}></video>`;
+    if (dubActive) {
+      // Hidden dub track, kept in sync with the muted video by wireDemoPlayers().
+      html += `<audio data-demo-dub="${id}" preload="auto" src="${apiBase}/api/demos/${id}/audio?which=dubbed"></audio>`;
+    }
+    html += renderDemoReel(d);
+  } else {
+    html += `<div class="demo-poster" onclick="playDemo('${id}')" title="Play demo">`;
+    if (posterUrl) html += `<img src="${posterUrl}" alt="" />`;
+    html += `<div class="demo-play">&#x25B6;</div></div>`;
+  }
+
+  // Script / transcript + actions
+  html += `<div class="demo-transcript">`;
+  if (script || hasTranscript) {
+    const active = script || t;
+    html += `<div class="demo-transcript-hdr"><span class="ai-label">${script ? 'Voice-over Script' : 'Demo Script'}</span>`;
+    html += `<button class="copy-prompt-btn" onclick="copyDemoScript('${id}')" title="Copy the full script">&#x1F4CB; Copy</button></div>`;
+    const segs = active.segments || [];
+    if (segs.length) {
+      html += `<div class="demo-segs">` + segs.map((seg) => {
+        const start = Number(seg.start) || 0;
+        return `<div class="demo-seg" onclick="seekDemo('${id}', ${start})" title="Jump to this moment">`
+          + `<span class="demo-seg-t">${fmtClock(start * 1000)}</span>`
+          + `<span class="demo-seg-txt">${esc(seg.text || '')}</span></div>`;
+      }).join('') + `</div>`;
+    } else if (active.plain) {
+      html += `<div class="demo-plain">${esc(active.plain)}</div>`;
+    }
+    if (script && hasTranscript) {
+      html += `<details class="demo-raw"><summary>Raw transcript</summary><div class="demo-plain">${esc(t.plain || (t.segments || []).map((s) => s.text).join(' '))}</div></details>`;
+    }
+    html += `<div class="demo-actions-row">`;
+    if (hasTranscript) {
+      html += `<button class="ai-trigger-btn" onclick="makeDemoScript('${id}')" `
+        + `title="AI rewrites the narration into a polished voice-over script, using the window-focus and activity data captured while you recorded">`
+        + `&#x1FA84; ${script ? 'Regenerate script' : 'Write voice-over script'}</button>`;
+    }
+    html += renderDubControls(d, id);
+    html += `</div>`;
+  } else {
+    html += `<div class="demo-transcript-empty">`;
+    if (d.hasAudio) {
+      html += `<button class="btn-primary" onclick="transcribeDemo('${id}')" title="Transcribe the narration with AI">&#x2728; Transcribe narration</button>`;
+    } else {
+      html += `<span class="demo-note">No audio was recorded, so there is no narration to transcribe.</span>`;
+    }
+    html += `<div class="demo-actions-row">` + renderDubControls(d, id) + `</div>`;
+    html += `</div>`;
+  }
+  html += `</div></div>`; // .demo-transcript .demo-card
+  return html;
+}
+
+// Timeline reel: narrated stretches highlighted, marker pins, live playhead.
+// Click anywhere to jump the video there.
+function renderDemoReel(d) {
+  const durMs = d.durationMs || 0;
+  if (!durMs) return '';
+  const id = escAttr(d.id);
+  const pct = (ms) => Math.max(0, Math.min(100, (ms / durMs) * 100));
+  let html = `<div class="demo-reel" data-demo-reel="${id}" onclick="reelSeek(event, '${id}', ${durMs})" `
+    + `title="Click to jump — highlighted stretches are moments you were narrating">`;
+  for (const s of d.speechSegments || []) {
+    const left = pct((Number(s.start) || 0) * 1000);
+    const width = Math.max(0.6, pct((Number(s.end) || 0) * 1000) - left);
+    html += `<div class="demo-reel-speech" style="left:${left}%;width:${width}%"></div>`;
+  }
+  for (const m of d.markers || []) {
+    html += `<div class="demo-reel-marker" style="left:${pct(m.t || 0)}%" title="Marker at ${fmtClock(m.t || 0)}"></div>`;
+  }
+  html += `<div class="demo-reel-playhead" data-demo-playhead="${id}"></div>`;
+  html += `</div>`;
+  if ((d.speechSegments || []).length) {
+    html += `<div class="demo-reel-legend">&#x1F399; highlights = you were narrating &middot; &#x1F6A9; = markers &middot; click the reel to jump</div>`;
+  }
+  return html;
+}
+
+function reelSeek(event, id, durMs) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  seekDemo(id, (frac * durMs) / 1000);
+}
+
+function renderDubControls(d, id) {
+  if (dubRecordingId === d.id) {
+    return `<span class="demo-badge dub-live">&#x23FA; recording your narration&hellip;</span>`
+      + `<button class="btn-primary" onclick="stopSelfDub(true)">&#x23F9; Stop &amp; Save</button>`
+      + `<button class="sb-btn-action" onclick="stopSelfDub(false)">Cancel</button>`;
+  }
+  let html = '';
+  if (d.audioDubbedPath) {
+    const mode = d.audioMode === 'dubbed' ? 'dubbed' : 'original';
+    html += `<span class="demo-audio-toggle">Play:`
+      + `<button class="demo-mode-btn${mode === 'original' ? ' active' : ''}" onclick="setDemoAudioMode('${id}','original')" title="Play the original recorded narration">Original</button>`
+      + `<button class="demo-mode-btn${mode === 'dubbed' ? ' active' : ''}" onclick="setDemoAudioMode('${id}','dubbed')" title="Play the dubbed narration over the video">Dub</button>`
+      + `</span>`;
+    html += `<button class="sb-btn-action" onclick="recordSelfDub('${id}')" title="Re-record the dub in your own voice while the video plays muted">&#x1F399; Re-record dub</button>`;
+    html += `<button class="sb-btn-action" onclick="removeDub('${id}')" title="Delete the dub and go back to the original audio">Remove dub</button>`;
+  } else {
+    if ((d.script && d.script.plain) || (d.transcript && d.transcript.plain)) {
+      html += `<button class="ai-trigger-btn" onclick="dubDemo('${id}')" title="Experimental: synthesize an AI voice-over from the script (needs a Gemini TTS-capable key)">&#x1F50A; AI dub (beta)</button>`;
+    }
+    html += `<button class="sb-btn-action" onclick="recordSelfDub('${id}')" title="Play the video muted and record yourself reading the script — saved as this demo's narration">&#x1F399; Dub it myself</button>`;
+  }
+  return html;
+}
+
+function startNewDemo(projectId) {
+  window.quickclip.openRecorder(projectId);
+  showToast('Opening recorder…');
+}
+
+// Post-render wiring for the expanded demo player: restores playback state the
+// innerHTML render destroyed, drives the reel playhead, and keeps an active dub
+// track (or an in-progress self-dub) glued to the video.
+function wireDemoPlayers() {
+  const id = expandedDemoId;
+  if (!id) { _demoPlayState = null; _demoAutoplayNext = null; return; }
+  const v = document.querySelector(`video[data-demo-video="${CSS.escape(id)}"]`);
+  if (!v) return;
+
+  if (_demoPlayState && _demoPlayState.id === id) {
+    if (_demoPlayState.time > 0) v.currentTime = _demoPlayState.time;
+    if (!_demoPlayState.paused) v.play().catch(() => {});
+  } else if (_demoAutoplayNext === id) {
+    v.play().catch(() => {});
+  }
+  _demoPlayState = null;
+  _demoAutoplayNext = null;
+
+  const playhead = document.querySelector(`[data-demo-playhead="${CSS.escape(id)}"]`);
+  if (playhead) {
+    v.addEventListener('timeupdate', () => {
+      if (v.duration) playhead.style.left = `${(v.currentTime / v.duration) * 100}%`;
+    });
+  }
+
+  const dub = document.querySelector(`audio[data-demo-dub="${CSS.escape(id)}"]`);
+  if (dub) {
+    v.muted = true;
+    v.addEventListener('play', () => { dub.currentTime = v.currentTime; dub.play().catch(() => {}); });
+    v.addEventListener('pause', () => dub.pause());
+    v.addEventListener('seeking', () => { dub.currentTime = v.currentTime; });
+    v.addEventListener('ratechange', () => { dub.playbackRate = v.playbackRate; });
+    v.addEventListener('ended', () => dub.pause());
+  }
+
+  // Self-dub in progress: video stays muted; finishing the video saves the dub.
+  if (dubRecordingId === id) {
+    v.muted = true;
+    v.addEventListener('ended', () => { if (dubRecordingId === id) stopSelfDub(true); });
+  }
+}
+
+function playDemo(id) {
+  if (dubRecordingId) { showToast('Finish or cancel the dub recording first'); return; }
+  expandedDemoId = (expandedDemoId === id) ? null : id;
+  if (expandedDemoId) _demoAutoplayNext = id;
+  renderAll();
+}
+
+function seekDemo(id, seconds) {
+  const v = document.querySelector(`video[data-demo-video="${CSS.escape(id)}"]`);
+  if (v) {
+    v.currentTime = seconds;
+    v.play().catch(() => {});
+  } else {
+    // Player not open yet — open it, then seek once it mounts.
+    expandedDemoId = id;
+    renderAll();
+    setTimeout(() => {
+      const vv = document.querySelector(`video[data-demo-video="${CSS.escape(id)}"]`);
+      if (vv) { vv.currentTime = seconds; vv.play().catch(() => {}); }
+    }, 250);
+  }
+}
+
+async function transcribeDemo(id) {
+  showToast('Transcribing demo…');
+  const r = await window.quickclip.generateDemoTranscript(id);
+  if (r && r.success) { await loadDemosData(selectedProjectId); renderAll(); showToast('Transcript ready'); }
+  else showToast('Transcription failed: ' + ((r && r.error) || 'unknown'));
+}
+
+async function makeDemoScript(id) {
+  showToast('Writing voice-over script from your narration + screen activity…');
+  const r = await window.quickclip.generateDemoScript(id);
+  if (r && r.success) { await loadDemosData(selectedProjectId); renderAll(); showToast('Voice-over script ready'); }
+  else showToast('Script failed: ' + ((r && r.error) || 'unknown'));
+}
+
+async function dubDemo(id) {
+  showToast('Generating AI voice-over (experimental)…');
+  const r = await window.quickclip.generateDemoDub(id, {});
+  if (r && r.success) { await loadDemosData(selectedProjectId); renderAll(); showToast('Dub ready — playback now uses the AI narration'); }
+  else showToast('Dub failed: ' + ((r && r.error) || 'unknown'));
+}
+
+async function setDemoAudioMode(id, mode) {
+  await window.quickclip.updateDemo(id, { audio_mode: mode });
+  await loadDemosData(selectedProjectId);
+  renderAll();
+}
+
+async function removeDub(id) {
+  if (!confirm('Remove the dubbed narration? Playback goes back to the original audio.')) return;
+  await window.quickclip.demoDubCancel(id);
+  await loadDemosData(selectedProjectId);
+  renderAll();
+}
+
+// ── Self-dub: record your own narration while the video plays muted ──
+
+async function recordSelfDub(id) {
+  if (dubRecordingId) return;
+  let mic;
+  try { mic = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { showToast('Microphone unavailable: ' + e.message); return; }
+
+  const begin = await window.quickclip.demoDubBegin(id);
+  if (!begin || !begin.success) {
+    mic.getTracks().forEach((t) => t.stop());
+    showToast('Could not start dub: ' + ((begin && begin.error) || 'unknown'));
+    return;
+  }
+
+  const mime = ['audio/webm;codecs=opus', 'audio/webm'].find((m) => {
+    try { return MediaRecorder.isTypeSupported(m); } catch { return false; }
+  }) || 'audio/webm';
+  _dubMicStream = mic;
+  _dubTail = Promise.resolve();
+  _dubRecorder = new MediaRecorder(mic, { mimeType: mime });
+  _dubRecorder.ondataavailable = (e) => {
+    if (!e.data || !e.data.size) return;
+    _dubTail = _dubTail.then(() => e.data.arrayBuffer()).then((buf) => window.quickclip.demoDubChunk(id, buf));
+  };
+
+  dubRecordingId = id;
+  expandedDemoId = id;
+  _demoPlayState = null;
+  _demoAutoplayNext = null;
+  renderAll();
+
+  const v = document.querySelector(`video[data-demo-video="${CSS.escape(id)}"]`);
+  if (v) { v.muted = true; v.currentTime = 0; }
+  _dubRecorder.start(1000);
+  if (v) v.play().catch(() => {});
+  showToast('Recording your narration — the video plays muted and saves automatically at the end.');
+}
+
+async function stopSelfDub(save = true) {
+  const id = dubRecordingId;
+  if (!id) return;
+  dubRecordingId = null;
+
+  const v = document.querySelector(`video[data-demo-video="${CSS.escape(id)}"]`);
+  if (v) { try { v.pause(); } catch {} }
+  if (_dubRecorder && _dubRecorder.state !== 'inactive') {
+    await new Promise((r) => { _dubRecorder.onstop = r; _dubRecorder.stop(); });
+  }
+  await _dubTail; // flush in-flight chunk sends
+  if (_dubMicStream) { _dubMicStream.getTracks().forEach((t) => t.stop()); _dubMicStream = null; }
+  _dubRecorder = null;
+
+  const r = save
+    ? await window.quickclip.demoDubFinish(id)
+    : await window.quickclip.demoDubCancel(id);
+  if (save) {
+    showToast(r && r.success ? 'Dub saved — playback now uses your new narration' : 'Dub failed: ' + ((r && r.error) || 'unknown'));
+  }
+  await loadDemosData(selectedProjectId);
+  renderAll();
+}
+
+async function removeDemo(id) {
+  if (!confirm('Move this demo to trash? Its files are kept until the trash is purged (30 days).')) return;
+  await window.quickclip.deleteDemo(id);
+  await loadDemosData(selectedProjectId);
+  renderAll();
+}
+
+function showDemoTitleInput(id) {
+  const label = document.getElementById(`dtitle-${id}`);
+  const input = document.getElementById(`dtitle-in-${id}`);
+  if (label) label.style.display = 'none';
+  if (input) { input.style.display = 'block'; input.focus(); input.select(); }
+}
+
+function hideDemoTitleInput(id) {
+  const label = document.getElementById(`dtitle-${id}`);
+  const input = document.getElementById(`dtitle-in-${id}`);
+  if (input) input.style.display = 'none';
+  if (label) label.style.display = 'block';
+}
+
+async function saveDemoTitle(id) {
+  const input = document.getElementById(`dtitle-in-${id}`);
+  if (!input) return;
+  const next = input.value.trim();
+  const d = projectDemos.find((x) => x.id === id);
+  if (d && next !== (d.title || '')) {
+    await window.quickclip.updateDemo(id, { title: next });
+    await loadDemosData(selectedProjectId);
+  }
+  renderAll();
+}
+
+function copyDemoScript(id) {
+  const d = projectDemos.find((x) => x.id === id);
+  if (!d) return;
+  const src = (d.script && d.script.plain) ? d.script : d.transcript;
+  if (!src) return;
+  const text = src.plain || (src.segments || []).map((s) => s.text).join('\n');
+  navigator.clipboard.writeText(text).then(() => showToast('Script copied')).catch(() => {});
 }
 
 function renderWorkflowContent(el) {
@@ -1392,6 +1860,10 @@ function renderProjectDetail(el) {
     renderProjectDetailWorkflow(el, proj);
     return;
   }
+  if (projectDetailTab === 'demos') {
+    renderProjectDetailDemos(el, proj);
+    return;
+  }
 
   let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
   const totalInProject = projectClips.length;
@@ -1438,11 +1910,8 @@ function renderProjectDetail(el) {
     </div>
   </div>`;
 
-  // Notes / Workflow sub-tab strip
-  html += `<div class="project-tab-strip">
-    <button class="project-tab${projectDetailTab === 'notes' ? ' active' : ''}" onclick="setProjectDetailTab('notes')">Notes</button>
-    <button class="project-tab${projectDetailTab === 'workflow' ? ' active' : ''}" onclick="setProjectDetailTab('workflow')">Workflow</button>
-  </div>`;
+  // Notes / Demos / Workflow sub-tab strip
+  html += renderProjectTabStrip('notes');
 
   if (completedCount > 0 || withPromptCount > 0) {
     html += `<div class="project-filters">`;

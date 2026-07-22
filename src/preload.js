@@ -117,6 +117,38 @@ contextBridge.exposeInMainWorld('quickclip', {
   onClipsChanged: (cb) => ipcRenderer.on('clips-changed', () => cb()),
   onProjectsChanged: (cb) => ipcRenderer.on('projects-changed', () => cb()),
   onPromptAutoCopied: (cb) => ipcRenderer.on('prompt-auto-copied', () => cb()),
+  onDemosChanged: (cb) => ipcRenderer.on('demos-changed', () => cb()),
+
+  // Demos — viewer side
+  openRecorder: (projectId) => ipcRenderer.send('open-recorder', projectId),
+  getDemos: (projectId) => ipcRenderer.invoke('get-demos', projectId),
+  getDemo: (id) => ipcRenderer.invoke('get-demo', id),
+  updateDemo: (id, updates) => ipcRenderer.invoke('update-demo', id, updates),
+  deleteDemo: (id) => ipcRenderer.invoke('delete-demo', id),
+  restoreDemo: (id) => ipcRenderer.invoke('restore-demo', id),
+  permanentDeleteDemo: (id) => ipcRenderer.invoke('permanent-delete-demo', id),
+  getDemoTrash: () => ipcRenderer.invoke('get-demo-trash'),
+  generateDemoTranscript: (id) => ipcRenderer.invoke('generate-demo-transcript', id),
+  generateDemoScript: (id) => ipcRenderer.invoke('generate-demo-script', id),
+  generateDemoDub: (id, opts) => ipcRenderer.invoke('generate-demo-dub', id, opts),
+
+  // Demos — self-dub (record your own narration over muted playback)
+  demoDubBegin: (id) => ipcRenderer.invoke('demo-dub-begin', id),
+  demoDubChunk: (id, chunk) => ipcRenderer.send('demo-dub-chunk', id, chunk),
+  demoDubFinish: (id) => ipcRenderer.invoke('demo-dub-finish', id),
+  demoDubCancel: (id) => ipcRenderer.invoke('demo-dub-cancel', id),
+
+  // Demos — recorder side (record.html)
+  getRecorderContext: () => ipcRenderer.invoke('get-recorder-context'),
+  getRecordingSources: () => ipcRenderer.invoke('get-recording-sources'),
+  demoBegin: (opts) => ipcRenderer.invoke('demo-begin', opts),
+  demoVideoChunk: (demoId, chunk) => ipcRenderer.send('demo-video-chunk', demoId, chunk),
+  demoAudioChunk: (demoId, chunk) => ipcRenderer.send('demo-audio-chunk', demoId, chunk),
+  demoPoster: (demoId, dataURL) => ipcRenderer.send('demo-poster', demoId, dataURL),
+  demoFinalize: (meta) => ipcRenderer.invoke('demo-finalize', meta),
+  demoCancel: (demoId) => ipcRenderer.invoke('demo-cancel', demoId),
+  closeRecorder: () => ipcRenderer.send('close-recorder'),
+  onDemoMarker: (cb) => ipcRenderer.on('demo-marker', () => cb()),
 
   // Workspace auto-register
   onWorkspaceProposed: (cb) => ipcRenderer.on('workspace-proposed', (_, data) => cb(data)),

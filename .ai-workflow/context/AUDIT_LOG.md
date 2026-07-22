@@ -285,3 +285,22 @@ No blocking issues. Feature can reuse existing project creation, settings storag
 - **VS Code tasks:** All existing tasks are active and non-overlapping; no build tasks yet; clean structure.
 - **Inconsistent patterns:** `deploy.sh` duplicates process-kill logic instead of calling `kill-all.sh`. Two OS detection approaches: `uname -s` in bash vs `process.platform` in Node (acceptable divergence for different contexts).
 - **Recommendation:** Create NEW `scripts/build.sh` that reuses OS detection from `deploy.sh`, calls `bash scripts/kill-all.sh` (not reimplementing), installs deps if needed, prompts for or accepts OS arg, and runs `npm run build:win|linux` accordingly. Separate script is cleaner than extending deploy.sh (focused responsibility, DRY via kill-all.sh reuse). Optional future cleanup: refactor deploy.sh to call kill-all.sh instead of reimplementing lines 43–59.
+
+## 2026-07-22 — Project Demos (screen recording + AI transcript/dubbing + Demos sub-tab)
+
+- Project detail tab strip HTML is duplicated at `renderer/index.js:1442-1445` (renderProjectDetail) and `:764-767` (renderProjectDetailWorkflow) — extract shared `renderProjectTabStrip(activeTab)` helper rather than adding a 3rd copy for the Demos tab.
+- No video/audio infrastructure exists at any layer (renderer, main, storage, api, mcp) — only PNG screenshots. Demos require all-new: `src/media.js`, main-process capture/permission handlers, streaming playback endpoint, `<video>` renderer.
+- CSP in `renderer/index.html:4` has `default-src 'none'` and no `media-src` — playback is blocked until a `media-src` directive is added.
+- `images.js` round-trips whole files through base64 data URLs — must NOT be copied for video/audio (memory blowup); demo media uses path-based storage + HTTP range streaming instead.
+- No global input hook in Electron — per-click capture across apps isn't natively available; MVP uses marker-hotkey + speech-derived markers, `uiohook-napi` noted as the future path.
+- Clip IDs are `Date.now().toString()` generated renderer-side (capture.js:160, focused-capture.js:25); demo IDs are generated in main at record-start so streamed file paths are server-authoritative.
+- Pre-existing (not fixed here, out of scope): `normalizeRepoPath()` duplicated 3× (main.js, api-server.js, mcp-server); `'lite'` lingers in VALID_SOURCES vs pg CHECK; `ai.js` hardcodes `mime_type:'image/png'` in 3 spots vs regex detection in 1. New demo audio code uses correct regex mime detection.
+- Recommendation: build demos as their own `demos` table + `src/media.js` module mirroring the clips/images separation; wire IPC + HTTP API + MCP per the project's three-layer convention; gate TTS dubbing behind an experimental flag (needs a preview Gemini model + PCM→WAV, untested).
+
+## 2026-07-22 — Demos v2 (speech timeline, activity tracker, voice-over script, self-dub) + review fixes
+
+- **Dead code resolved:** `getDemoTrash()` existed in db.js/db-pg.js/db-sqlite.js with zero callers, and `restoreDemo`/`permanentDeleteDemo` were exposed in preload but never invoked by any renderer — all now wired into the new Demos-tab Trash section (IPC `get-demo-trash`, HTTP `GET /api/demos/trash` + restore/permanent routes).
+- **Duplicated escaping helpers (deferred):** `record.js` (escapeHtml/escapeAttr) duplicates `index.js` (esc/escAttr); every renderer page ships its own escapers by design (standalone pages, no shared module loader). Consolidating would touch capture/toolbar/overlay/setup too — deferred as a dedicated cleanup, not piled onto this feature.
+- **Inconsistent JSON-row parsing between backends is intentional:** pg's driver parses JSONB natively; sqlite needs `parseDemoRow`. sqlite's `parseDemoRow` now also normalizes `datetime('now')` timestamps to ISO-8601 UTC (raw strings parsed as local time in Chromium — "just now" bug).
+- **Review fixes landed alongside the feature:** fs stream `'error'` handlers in media.js writers + `stream.pipeline` in api-server streaming (crash + fd-leak class), read paths no longer `mkdir` (auth-less API could create unlimited dirs), permission handler scoped to media/display-capture instead of allow-all, `demo-cancel` guarded to in-flight recordings, suffix Range requests handled per RFC, audio/poster routes check demo existence, playing video survives re-renders.
+- Recommendation: hands-on test the recorder/VAD/self-dub path on a real screen + mic (still not exercised headlessly); consider `uiohook-napi` for true click markers and `kokoro-js` as an offline TTS fallback for the dub slot.

@@ -80,6 +80,35 @@ CREATE TABLE clip_comments (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Demos (screen recordings + AI transcript / dubbing)
+CREATE TABLE demos (
+    id                  VARCHAR(20) PRIMARY KEY,
+    project_id          INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    title               TEXT DEFAULT '',
+    description         TEXT DEFAULT '',
+    video_path          TEXT DEFAULT NULL,
+    audio_original_path TEXT DEFAULT NULL,
+    audio_dubbed_path   TEXT DEFAULT NULL,
+    poster_path         TEXT DEFAULT NULL,
+    transcript          JSONB DEFAULT NULL,
+    script              JSONB DEFAULT NULL,
+    markers             JSONB NOT NULL DEFAULT '[]',
+    speech_segments     JSONB NOT NULL DEFAULT '[]',
+    activity_log        JSONB DEFAULT NULL,
+    duration_ms         INTEGER NOT NULL DEFAULT 0,
+    has_audio           BOOLEAN NOT NULL DEFAULT FALSE,
+    audio_mode          VARCHAR(10) NOT NULL DEFAULT 'original',
+    source_type         VARCHAR(10) NOT NULL DEFAULT 'screen',
+    mime                VARCHAR(50) DEFAULT 'video/webm',
+    deleted_at          TIMESTAMPTZ DEFAULT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_demos_project ON demos(project_id);
+CREATE INDEX idx_demos_deleted ON demos(deleted_at);
+CREATE INDEX idx_demos_created ON demos(created_at DESC);
+
 -- Indexes
 CREATE INDEX idx_clips_project     ON clips(project_id);
 CREATE INDEX idx_clips_category    ON clips(category_id);
@@ -114,6 +143,10 @@ CREATE TRIGGER trg_projects_updated_at
 
 CREATE TRIGGER trg_settings_updated_at
     BEFORE UPDATE ON settings
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER trg_demos_updated_at
+    BEFORE UPDATE ON demos
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- Window rules for rule-based categorization

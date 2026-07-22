@@ -349,23 +349,43 @@ async function search(query, clips) {
 
 // ── Internal ──
 
-async function callGemini(systemInstruction, parts, { raw = false } = {}) {
+async function callGemini(systemInstruction, parts, options = {}) {
   if (!isEnabled()) return null;
+
+  // Most callers use the defaults (categorize/search/focused). Audio work
+  // overrides: `model` (TTS needs a different model), `generationConfig`
+  // (bigger token cap for transcripts, AUDIO modality for TTS), `timeoutMs`
+  // (audio can exceed the 30s image budget), and `wantAudio` (return the
+  // response's inline audio bytes instead of text).
+  const {
+    raw = false,
+    model = MODEL,
+    generationConfig = GENERATION_CONFIG,
+    timeoutMs = 30000,
+    wantAudio = false,
+  } = options;
 
   let url, headers;
 
   if (authMode === 'apikey') {
-    url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${geminiApiKey}`;
+    url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`;
     headers = { 'Content-Type': 'application/json' };
   } else {
     const token = await getAccessToken();
     url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${vertexCreds.project_id}`
-      + `/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
+      + `/locations/${LOCATION}/publishers/google/models/${model}:generateContent`;
     headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const requestBody = {
+    contents: [{ role: 'user', parts }],
+    generationConfig,
+  };
+  // TTS models reject a systemInstruction — callers pass null to omit it.
+  if (systemInstruction) requestBody.systemInstruction = { parts: [{ text: systemInstruction }] };
 
   let res;
   try {
@@ -373,11 +393,7 @@ async function callGemini(systemInstruction, parts, { raw = false } = {}) {
       method: 'POST',
       headers,
       signal: controller.signal,
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        generationConfig: GENERATION_CONFIG,
-      }),
+      body: JSON.stringify(requestBody),
     });
   } finally {
     clearTimeout(timeout);
@@ -386,6 +402,18 @@ async function callGemini(systemInstruction, parts, { raw = false } = {}) {
   const data = await res.json();
   if (data.error) {
     throw new Error(data.error.message || JSON.stringify(data.error));
+  }
+
+  // Audio (TTS) responses carry bytes in an inlineData part, not text.
+  if (wantAudio) {
+    const outParts = data.candidates?.[0]?.content?.parts || [];
+    for (const p of outParts) {
+      const inline = p.inlineData || p.inline_data;
+      if (inline && inline.data) {
+        return { data: inline.data, mimeType: inline.mimeType || inline.mime_type || 'audio/L16;rate=24000' };
+      }
+    }
+    return null;
   }
 
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -539,8 +567,198 @@ async function generateCombinedPrompt(notes) {
   return typeof result === 'string' ? result.replace(/^["']|["']$/g, '') : '';
 }
 
+// ── Demos: transcription + dubbing ──
+
+// Transcription can produce a long script, so raise the token cap well above
+// the 2048 image default and give audio a 2-minute budget instead of 30s.
+const TRANSCRIBE_CONFIG = { temperature: 0.3, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } };
+const AUDIO_TIMEOUT_MS = 120000;
+
+const DEMO_TRANSCRIPT_SYSTEM = `You are the demo-narration editor for HuminLoop.
+You receive an audio recording of a developer narrating a product/feature demo while performing
+actions on screen, plus a list of timestamped markers the developer dropped during recording
+(moments they flagged as worth explaining).
+
+Your job: produce a CLEAN, readable narration script the developer can read aloud to re-record or
+present the demo. Remove filler words ("um", "uh", "like"), false starts, and rambling — but keep
+every technical specific (file names, commands, feature names, numbers). Preserve the developer's
+meaning and order. Break the narration into short segments aligned to what was said, each with an
+approximate start time in SECONDS from the beginning of the recording.
+
+Return ONLY valid JSON. No markdown fences, no explanation. Schema:
+{
+  "title": "string — a short title for this demo",
+  "plain": "string — the full cleaned narration as readable paragraphs",
+  "segments": [
+    { "start": <number seconds>, "text": "<clean segment text>", "type": "speech" }
+  ]
+}
+Rules:
+- segment.start values must be non-decreasing and fall within the recording duration.
+- Do NOT invent content that was not spoken. If a stretch has no speech, skip it.
+- If the audio contains no discernible speech, return {"title":"","plain":"","segments":[]}.`;
+
+/**
+ * Transcribe + clean a demo's narration audio into a readable, timestamped script.
+ * @param {string} audioBase64 - base64 audio (mic track, typically audio/webm)
+ * @param {string} mime - audio mime type (detected from the file, NOT hardcoded)
+ * @param {{markers?: Array, durationMs?: number, project?: object}} context
+ * @returns {Promise<{title:string, plain:string, segments:Array}|null>}
+ */
+async function generateDemoTranscript(audioBase64, mime, context = {}) {
+  if (!isEnabled() || !audioBase64) return null;
+  const { markers = [], durationMs = 0, project = {} } = context;
+
+  const ctx = [];
+  if (project.name) ctx.push(`Project: ${project.name}`);
+  if (project.description) ctx.push(`Project description: ${project.description}`);
+  if (durationMs) ctx.push(`Recording length: ${Math.round(durationMs / 1000)} seconds`);
+  if (markers.length) {
+    const secs = markers.map(m => Math.round((m.t || 0) / 1000)).join(', ');
+    ctx.push(`Developer dropped markers at these seconds (pay extra attention there): ${secs}`);
+  }
+  const userText = ctx.length ? ctx.join('\n') : 'Transcribe and clean up the demo narration.';
+
+  const parts = [
+    { inline_data: { mime_type: mime || 'audio/webm', data: audioBase64 } },
+    { text: userText },
+  ];
+
+  try {
+    const result = await callGemini(DEMO_TRANSCRIPT_SYSTEM, parts, {
+      generationConfig: TRANSCRIBE_CONFIG,
+      timeoutMs: AUDIO_TIMEOUT_MS,
+    });
+    if (!result) return null;
+    if (!Array.isArray(result.segments)) result.segments = [];
+    if (typeof result.plain !== 'string') result.plain = '';
+    if (typeof result.title !== 'string') result.title = '';
+    return result;
+  } catch (e) {
+    console.error('[AI] Demo transcript generation failed:', e.message);
+    return null;
+  }
+}
+
+// ── Demo script: transcript + activity metadata → polished voice-over ────────
+
+const DEMO_SCRIPT_SYSTEM = `You are a voice-over script writer for HuminLoop product demos.
+You receive:
+1. A cleaned transcript of what a developer said while recording a screen demo (with segment start times in seconds).
+2. Optional activity metadata captured alongside the recording: which application windows had focus over time, and how much the mouse moved (a proxy for on-screen action).
+3. Optional markers the developer dropped at moments worth explaining.
+
+Your job: write the FINAL narration script for this demo — the polished voice-over the developer
+(or a TTS voice) will read over the video. Requirements:
+- Ground every line in what was actually said and done. Use the window-focus timeline to name the
+  apps/files on screen when it clarifies the story ("switching to the terminal…"), but NEVER invent
+  actions that aren't supported by the transcript or activity data.
+- Rewrite rough, rambling speech into clear, confident, present-tense narration. Keep every
+  technical specific (file names, commands, feature names, numbers).
+- Keep segments aligned to the original timing: each segment's start must stay close to when that
+  content was originally spoken, so the narration matches what's on screen. Cover marker moments.
+- Match the spoken pace — a segment should be readable in the time before the next one starts.
+- Write it to be READ ALOUD: contractions are fine, no headings, no stage directions, no timestamps
+  inside the text.
+
+Return ONLY valid JSON. No markdown fences. Schema:
+{
+  "plain": "string — the full script as readable paragraphs",
+  "segments": [ { "start": <number seconds>, "text": "<script line>" } ]
+}`;
+
+/**
+ * Generate the final polished voice-over script from the transcript plus the
+ * recording's activity metadata (window focus + cursor activity + markers).
+ * @returns {Promise<{plain:string, segments:Array}|null>}
+ */
+async function generateDemoScript({ transcript, markers = [], speechSegments = [], activityLog = null, durationMs = 0, project = {} } = {}) {
+  if (!isEnabled() || !transcript || !(transcript.plain || (transcript.segments || []).length)) return null;
+
+  const ctx = [];
+  if (project.name) ctx.push(`Project: ${project.name}`);
+  if (project.description) ctx.push(`Project description: ${project.description}`);
+  if (durationMs) ctx.push(`Recording length: ${Math.round(durationMs / 1000)} seconds`);
+
+  ctx.push('', 'TRANSCRIPT (cleaned, with start times in seconds):');
+  const segs = transcript.segments || [];
+  if (segs.length) {
+    for (const s of segs) ctx.push(`[${Math.round(s.start || 0)}s] ${s.text || ''}`);
+  } else {
+    ctx.push(transcript.plain);
+  }
+
+  if (markers.length) {
+    ctx.push('', `Markers dropped by the developer (seconds): ${markers.map(m => Math.round((m.t || 0) / 1000)).join(', ')}`);
+  }
+  if (speechSegments.length) {
+    ctx.push('', `Detected narration windows (seconds): ${speechSegments.map(s => `${s.start}-${s.end}`).join(', ')}`);
+  }
+  if (activityLog && Array.isArray(activityLog.focus) && activityLog.focus.length) {
+    ctx.push('', 'Window focus timeline (what was on screen):');
+    for (const f of activityLog.focus.slice(0, 80)) {
+      ctx.push(`[${Math.round((f.t || 0) / 1000)}s] ${f.app || '?'} — ${f.title || ''}`);
+    }
+  }
+  if (activityLog && Array.isArray(activityLog.cursor) && activityLog.cursor.length) {
+    const busy = activityLog.cursor
+      .filter(c => c.moves > 500)
+      .map(c => `${Math.round((c.t || 0) / 1000)}s`);
+    if (busy.length) ctx.push('', `High mouse-activity moments (lots happening on screen): ${busy.slice(0, 60).join(', ')}`);
+  }
+
+  try {
+    const result = await callGemini(DEMO_SCRIPT_SYSTEM, [{ text: ctx.join('\n') }], {
+      generationConfig: TRANSCRIBE_CONFIG,
+      timeoutMs: AUDIO_TIMEOUT_MS,
+    });
+    if (!result || typeof result.plain !== 'string' || !result.plain) return null;
+    if (!Array.isArray(result.segments)) result.segments = [];
+    return result;
+  } catch (e) {
+    console.error('[AI] Demo script generation failed:', e.message);
+    return null;
+  }
+}
+
+// EXPERIMENTAL — text-to-speech "dub" of the cleaned narration. Requires a
+// Gemini TTS preview model and is most reliable on the API-key surface; on some
+// Vertex configs the model may be unavailable (returns null, logged).
+const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+
+/**
+ * Synthesize spoken audio from narration text.
+ * @param {string} text
+ * @param {{voice?: string}} opts - prebuilt voice name (e.g. 'Kore', 'Puck')
+ * @returns {Promise<{pcmBase64:string, sampleRate:number}|null>} raw PCM (wrap via media.pcmToWav)
+ */
+async function synthesizeDemoDub(text, { voice = 'Kore' } = {}) {
+  if (!isEnabled() || !text) return null;
+  const generationConfig = {
+    responseModalities: ['AUDIO'],
+    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+  };
+  const parts = [{ text: `Read the following demo narration aloud in a clear, friendly, professional voice:\n\n${text}` }];
+  try {
+    const audio = await callGemini(null, parts, {
+      model: TTS_MODEL,
+      generationConfig,
+      timeoutMs: AUDIO_TIMEOUT_MS,
+      wantAudio: true,
+    });
+    if (!audio || !audio.data) return null;
+    const rateMatch = /rate=(\d+)/.exec(audio.mimeType || '');
+    const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+    return { pcmBase64: audio.data, sampleRate };
+  } catch (e) {
+    console.error('[AI] Demo dub (TTS) failed:', e.message);
+    return null;
+  }
+}
+
 module.exports = {
   init, isEnabled, categorize, generateFocusedPrompt, search, summarizeNotes, generateCombinedPrompt,
+  generateDemoTranscript, generateDemoScript, synthesizeDemoDub,
   getCategorizePrompt, getPromptBlocks, setPromptBlocks, resetPromptBlocks, estimateTokens,
   DEFAULT_ANNOTATION_COLORS,
 };

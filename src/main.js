@@ -19,8 +19,9 @@ if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) {
 const db = require('./db');
 const ai = require('./ai');
 const rules = require('./rules');
-const { getActiveWindow } = require('./window-info');
+const { getActiveWindow, getActiveWindowAsync } = require('./window-info');
 const images = require('./images');
+const media = require('./media');
 const workflowContext = require('./workflow-context');
 
 // ── Prompt ID Generation ──
@@ -335,11 +336,27 @@ async function createMainWindow() {
   });
   // WSLg/Linux compositors sometimes mis-report the work area on maximize, leaving the window
   // covering only a fraction of the screen with unresponsive native decorations. Force-fit instead.
+  //
+  // Guard against recursion: setBounds(workArea) can make the compositor re-emit 'maximize',
+  // re-entering this handler. Unguarded, that recurses until the stack overflows and the process
+  // exits (seen on WSLg both at startup and on manual maximize). The re-entrancy flag stops the
+  // synchronous re-emit; the idempotence check skips the redundant setBounds so a late async
+  // re-emit can't ping-pong either.
   if (process.platform === 'linux') {
+    let fittingMaximize = false;
     mainWindow.on('maximize', () => {
-      const display = screen.getDisplayMatching(mainWindow.getBounds());
-      mainWindow.unmaximize();
-      mainWindow.setBounds(display.workArea);
+      if (fittingMaximize) return;
+      fittingMaximize = true;
+      try {
+        const wa = screen.getDisplayMatching(mainWindow.getBounds()).workArea;
+        mainWindow.unmaximize();
+        const b = mainWindow.getBounds();
+        if (b.x !== wa.x || b.y !== wa.y || b.width !== wa.width || b.height !== wa.height) {
+          mainWindow.setBounds(wa);
+        }
+      } finally {
+        setImmediate(() => { fittingMaximize = false; });
+      }
     });
   }
 }
@@ -648,6 +665,453 @@ ipcMain.handle('snippet-captured', async (_, dataUrl) => {
   await createCaptureWindow(dataUrl, meta);
 });
 
+// ── Demo Recording ──
+// Screen recording lives in a dedicated renderer (record.html) because
+// MediaRecorder/getUserMedia are DOM-only APIs. Main supplies capture sources
+// (desktopCapturer is main-only), streams the MediaRecorder chunks to disk via
+// src/media.js, and persists a `demos` row on stop.
+
+const ALLOWED_DEMO_FIELDS = ['title', 'description', 'audio_mode'];
+const MARKER_HOTKEY = process.env.MARKER_HOTKEY || 'CommandOrControl+Shift+M';
+
+let recorderWindow = null;
+let _pendingRecorderProject = null;   // project to pre-select in the recorder UI
+let _activeRecordingId = null;        // demo id currently streaming (for cleanup)
+const activeRecordings = new Map();   // demoId → { projectId, sourceType, hasAudio }
+
+let _lastDemoId = 0;
+function generateDemoId() {
+  let id = Date.now();
+  if (id <= _lastDemoId) id = _lastDemoId + 1; // avoid same-ms collisions
+  _lastDemoId = id;
+  return String(id);
+}
+
+function sanitizeDemoUpdates(updates) {
+  const clean = {};
+  for (const key of ALLOWED_DEMO_FIELDS) {
+    if (key in updates) clean[key] = updates[key];
+  }
+  return clean;
+}
+
+// Allow mic + screen capture for the recorder. No handler exists by default, so
+// getUserMedia({audio}) / getDisplayMedia() would otherwise be denied. Scoped to
+// media permissions only — a blanket grant would silently disable Electron's
+// permission layer (geolocation, HID, notifications, …) for every window.
+const MEDIA_PERMISSIONS = new Set(['media', 'audioCapture', 'videoCapture', 'display-capture', 'displayCapture', 'mediaKeySystem']);
+function configureMediaPermissions() {
+  const { session } = require('electron');
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(MEDIA_PERMISSIONS.has(permission)));
+  ses.setPermissionCheckHandler((_wc, permission) => MEDIA_PERMISSIONS.has(permission));
+  if (ses.setDisplayMediaRequestHandler) {
+    ses.setDisplayMediaRequestHandler((_request, callback) => {
+      desktopCapturer.getSources({ types: ['screen', 'window'] })
+        .then((sources) => callback(sources[0] ? { video: sources[0] } : {}))
+        .catch(() => callback({}));
+    });
+  }
+}
+
+// ── Recording activity tracker ──
+// Electron has no global input hook (per-click/keystroke capture needs a native
+// module — see docs/DEMOS.md), but main CAN observe two useful signals while a
+// demo records: which window has focus (async window-info poll) and how much
+// the cursor travels (cheap Electron API). The resulting log gives the AI
+// script generator a picture of what the user was DOING while narrating:
+//   { focus:  [{ t, app, title }],   — on change only, t = ms into recording
+//     cursor: [{ t, moves }] }       — 5s buckets, px traveled, quiet buckets skipped
+
+const ACTIVITY_CURSOR_POLL_MS = 250;
+const ACTIVITY_FOCUS_POLL_MS = 1500;
+const ACTIVITY_BUCKET_MS = 5000;
+const ACTIVITY_MAX_FOCUS = 400;
+const ACTIVITY_MAX_CURSOR = 720; // 1h of buckets
+
+const activityTrackers = new Map(); // demoId → tracker
+
+function startActivityTracker(demoId) {
+  stopActivityTracker(demoId);
+  const t = {
+    start: Date.now(),
+    log: { focus: [], cursor: [] },
+    lastFocusKey: null,
+    lastPt: null,
+    bucketT: 0,
+    bucketMoves: 0,
+    polling: false,
+    cursorTimer: null,
+    focusTimer: null,
+  };
+
+  t.cursorTimer = setInterval(() => {
+    try {
+      const pt = screen.getCursorScreenPoint();
+      const now = Date.now() - t.start;
+      if (t.lastPt) t.bucketMoves += Math.hypot(pt.x - t.lastPt.x, pt.y - t.lastPt.y);
+      t.lastPt = pt;
+      if (now - t.bucketT >= ACTIVITY_BUCKET_MS) {
+        if (t.bucketMoves > 0 && t.log.cursor.length < ACTIVITY_MAX_CURSOR) {
+          t.log.cursor.push({ t: t.bucketT, moves: Math.round(t.bucketMoves) });
+        }
+        t.bucketT = now;
+        t.bucketMoves = 0;
+      }
+    } catch { /* screen API unavailable — skip tick */ }
+  }, ACTIVITY_CURSOR_POLL_MS);
+
+  t.focusTimer = setInterval(async () => {
+    if (t.polling) return; // window-info child process still running
+    t.polling = true;
+    try {
+      const now = Date.now() - t.start;
+      const w = await getActiveWindowAsync();
+      const key = `${w.processName}|${w.title}`;
+      if ((w.title || w.processName) && key !== t.lastFocusKey && t.log.focus.length < ACTIVITY_MAX_FOCUS) {
+        t.lastFocusKey = key;
+        t.log.focus.push({ t: now, app: w.processName || null, title: w.title || null });
+      }
+    } finally {
+      t.polling = false;
+    }
+  }, ACTIVITY_FOCUS_POLL_MS);
+
+  activityTrackers.set(demoId, t);
+}
+
+/** Stop tracking and return the collected log (null if nothing was tracked). */
+function stopActivityTracker(demoId) {
+  const t = activityTrackers.get(demoId);
+  if (!t) return null;
+  activityTrackers.delete(demoId);
+  clearInterval(t.cursorTimer);
+  clearInterval(t.focusTimer);
+  if (t.bucketMoves > 0 && t.log.cursor.length < ACTIVITY_MAX_CURSOR) {
+    t.log.cursor.push({ t: t.bucketT, moves: Math.round(t.bucketMoves) });
+  }
+  return (t.log.focus.length || t.log.cursor.length) ? t.log : null;
+}
+
+function registerMarkerHotkey() {
+  try {
+    if (!globalShortcut.isRegistered(MARKER_HOTKEY)) {
+      globalShortcut.register(MARKER_HOTKEY, () => {
+        if (recorderWindow && !recorderWindow.isDestroyed()) recorderWindow.webContents.send('demo-marker');
+      });
+    }
+  } catch (e) { console.error('[HuminLoop] Marker hotkey register failed:', e.message); }
+}
+
+function unregisterMarkerHotkey() {
+  try { globalShortcut.unregister(MARKER_HOTKEY); } catch {}
+}
+
+function createRecorderWindow() {
+  if (recorderWindow && !recorderWindow.isDestroyed()) {
+    recorderWindow.show();
+    recorderWindow.focus();
+    return;
+  }
+  const area = activeCaptureWorkArea();
+  const width = 460, height = 600;
+  recorderWindow = new BrowserWindow({
+    width, height,
+    x: area.x + area.width - (width + 40),
+    y: area.y + 40,
+    minWidth: 360, minHeight: 420,
+    title: 'HuminLoop — Record Demo',
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    backgroundColor: '#13131f',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  recorderWindow.loadFile(path.join(__dirname, '..', 'renderer', 'record.html'));
+  recorderWindow.setAlwaysOnTop(true, 'screen-saver');
+  // Keep the control panel itself out of full-screen recordings (best-effort;
+  // unsupported on some Linux compositors).
+  try { recorderWindow.setContentProtection(true); } catch {}
+  recorderWindow.on('closed', () => {
+    recorderWindow = null;
+    unregisterMarkerHotkey();
+    // Discard any recording still in flight when the window closes.
+    if (_activeRecordingId) {
+      const id = _activeRecordingId;
+      _activeRecordingId = null;
+      activeRecordings.delete(id);
+      stopActivityTracker(id);
+      media.closeDemoWriters(id).then(() => media.deleteDemoDir(id)).catch(() => {});
+    }
+  });
+}
+
+ipcMain.on('open-recorder', (_, projectId) => {
+  _pendingRecorderProject = projectId || null;
+  createRecorderWindow();
+});
+
+ipcMain.on('close-recorder', () => {
+  if (recorderWindow && !recorderWindow.isDestroyed()) recorderWindow.close();
+});
+
+ipcMain.handle('get-recorder-context', async () => {
+  const projects = await db.getProjects();
+  let projectId = _pendingRecorderProject;
+  if (!projectId) {
+    const mode = await getAppMode();
+    if (mode === 'focused') projectId = await db.getSettings('focused_active_project');
+  }
+  return { projectId: projectId || null, projects, markerHotkey: MARKER_HOTKEY, aiEnabled: ai.isEnabled() };
+});
+
+// Enumerate screens + windows so the recorder UI can offer "entire screen" vs
+// "this app / a window" without invoking the OS picker.
+ipcMain.handle('get-recording-sources', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen', 'window'],
+    thumbnailSize: { width: 320, height: 200 },
+    fetchWindowIcons: false,
+  });
+  return sources.map((s) => ({
+    id: s.id,
+    name: s.name,
+    type: s.id.startsWith('screen:') ? 'screen' : 'window',
+    thumbnail: s.thumbnail ? s.thumbnail.toDataURL() : null,
+  }));
+});
+
+ipcMain.handle('demo-begin', async (_, opts = {}) => {
+  const demoId = generateDemoId();
+  const hasAudio = !!opts.hasAudio;
+  media.openDemoWriters(demoId, { audio: hasAudio });
+  activeRecordings.set(demoId, {
+    projectId: opts.projectId || null,
+    sourceType: opts.sourceType === 'window' ? 'window' : 'screen',
+    hasAudio,
+  });
+  _activeRecordingId = demoId;
+  registerMarkerHotkey();
+  startActivityTracker(demoId);
+  return { demoId };
+});
+
+ipcMain.on('demo-video-chunk', (_, demoId, chunk) => {
+  if (activeRecordings.has(demoId)) media.writeDemoVideoChunk(demoId, chunk);
+});
+
+ipcMain.on('demo-audio-chunk', (_, demoId, chunk) => {
+  if (activeRecordings.has(demoId)) media.writeDemoAudioChunk(demoId, chunk);
+});
+
+ipcMain.on('demo-poster', (_, demoId, dataURL) => {
+  if (activeRecordings.has(demoId)) {
+    try { media.saveDemoPoster(demoId, dataURL); } catch (e) { console.error('[HuminLoop] Poster save failed:', e.message); }
+  }
+});
+
+ipcMain.handle('demo-finalize', async (_, meta = {}) => {
+  const demoId = meta.demoId;
+  const rec = activeRecordings.get(demoId);
+  if (!rec) return { success: false, error: 'No active recording' };
+
+  const { failed } = await media.closeDemoWriters(demoId);
+  activeRecordings.delete(demoId);
+  if (_activeRecordingId === demoId) _activeRecordingId = null;
+  unregisterMarkerHotkey();
+  const activityLog = stopActivityTracker(demoId);
+
+  const hasAudio = rec.hasAudio && media.hasDemoFile(demoId, media.FILES.audioOriginal);
+  await db.saveDemo({
+    id: demoId,
+    project_id: meta.projectId || rec.projectId || null,
+    title: meta.title || '',
+    description: meta.description || '',
+    video_path: media.hasDemoFile(demoId, media.FILES.video) ? media.FILES.video : null,
+    audio_original_path: hasAudio ? media.FILES.audioOriginal : null,
+    poster_path: media.hasDemoFile(demoId, media.FILES.poster) ? media.FILES.poster : null,
+    markers: Array.isArray(meta.markers) ? meta.markers : [],
+    speech_segments: Array.isArray(meta.speechSegments) ? meta.speechSegments : [],
+    activity_log: activityLog,
+    duration_ms: meta.durationMs || 0,
+    has_audio: hasAudio,
+    audio_mode: 'original',
+    source_type: rec.sourceType,
+    mime: meta.mime || 'video/webm',
+  });
+
+  addAuditEntry('demo', `Demo recorded: ${demoId} (${Math.round((meta.durationMs || 0) / 1000)}s)`);
+  notifyMainWindow('demos-changed');
+  const saved = await db.getDemo(demoId);
+  if (failed) return { success: false, error: `Recording saved incompletely — disk write failed (${failed})`, demo: saved };
+  return { success: true, demo: saved };
+});
+
+ipcMain.handle('demo-cancel', async (_, demoId) => {
+  // Only in-flight recordings can be canceled — never delete a finalized
+  // demo's folder from here (its DB row would survive as a dead link).
+  if (!activeRecordings.has(demoId)) return { success: false, error: 'No active recording' };
+  activeRecordings.delete(demoId);
+  if (_activeRecordingId === demoId) _activeRecordingId = null;
+  unregisterMarkerHotkey();
+  stopActivityTracker(demoId);
+  await media.closeDemoWriters(demoId);
+  media.deleteDemoDir(demoId);
+  return { success: true };
+});
+
+// ── IPC Handlers: Demos (CRUD + AI) ──
+
+ipcMain.handle('get-demos', (_, projectId) => db.getDemos(projectId));
+ipcMain.handle('get-demo', (_, id) => db.getDemo(id));
+
+ipcMain.handle('update-demo', async (_, id, updates) => {
+  if (typeof id !== 'string' || !updates) return null;
+  const safe = sanitizeDemoUpdates(updates);
+  if (Object.keys(safe).length) await db.updateDemo(id, safe);
+  notifyMainWindow('demos-changed');
+  return db.getDemo(id);
+});
+
+ipcMain.handle('delete-demo', async (_, id) => {
+  if (typeof id !== 'string') return false;
+  await db.deleteDemo(id);
+  addAuditEntry('demo', `Demo trashed: ${id}`);
+  notifyMainWindow('demos-changed');
+  notifyMainWindow('projects-changed');
+  return true;
+});
+
+ipcMain.handle('restore-demo', async (_, id) => {
+  if (typeof id !== 'string') return false;
+  await db.restoreDemo(id);
+  notifyMainWindow('demos-changed');
+  return true;
+});
+
+ipcMain.handle('permanent-delete-demo', async (_, id) => {
+  if (typeof id !== 'string') return false;
+  media.deleteDemoDir(id);
+  await db.permanentDeleteDemo(id);
+  notifyMainWindow('demos-changed');
+  return true;
+});
+
+ipcMain.handle('generate-demo-transcript', async (_, id) => {
+  if (!ai.isEnabled()) return { success: false, error: 'AI is not enabled' };
+  const demo = await db.getDemo(id);
+  if (!demo) return { success: false, error: 'Demo not found' };
+  const audio = media.readDemoAudioBase64(id, 'original');
+  if (!audio) return { success: false, error: 'This demo has no audio track to transcribe' };
+
+  const project = demo.project_id ? await db.getProject(demo.project_id) : {};
+  const transcript = await ai.generateDemoTranscript(audio.base64, audio.mime, {
+    markers: demo.markers || [],
+    durationMs: demo.durationMs || 0,
+    project: project || {},
+  });
+  if (!transcript) return { success: false, error: 'Transcription failed — check AI credentials and try again' };
+
+  media.saveDemoTranscript(id, transcript);
+  const updates = { transcript };
+  if (!demo.title && transcript.title) updates.title = transcript.title;
+  await db.updateDemo(id, updates);
+  addAuditEntry('demo', `Transcript generated for demo ${id}`);
+  notifyMainWindow('demos-changed');
+  return { success: true, transcript };
+});
+
+ipcMain.handle('get-demo-trash', () => db.getDemoTrash());
+
+// Turn the transcript + recording activity metadata (window focus, cursor
+// activity, markers, narration windows) into the final voice-over script.
+ipcMain.handle('generate-demo-script', async (_, id) => {
+  if (!ai.isEnabled()) return { success: false, error: 'AI is not enabled' };
+  const demo = await db.getDemo(id);
+  if (!demo) return { success: false, error: 'Demo not found' };
+  const transcript = demo.transcript || media.loadDemoTranscript(id);
+  if (!transcript || !(transcript.plain || (transcript.segments || []).length)) {
+    return { success: false, error: 'No transcript yet — generate a transcript first' };
+  }
+
+  const project = demo.project_id ? await db.getProject(demo.project_id) : {};
+  const script = await ai.generateDemoScript({
+    transcript,
+    markers: demo.markers || [],
+    speechSegments: demo.speechSegments || [],
+    activityLog: demo.activityLog || null,
+    durationMs: demo.durationMs || 0,
+    project: project || {},
+  });
+  if (!script) return { success: false, error: 'Script generation failed — check AI credentials and try again' };
+
+  await db.updateDemo(id, { script });
+  addAuditEntry('demo', `Clean script generated for demo ${id}`);
+  notifyMainWindow('demos-changed');
+  return { success: true, script };
+});
+
+// ── Self-dub: re-record narration in the viewer while the video plays muted ──
+// Same chunk-streaming pattern as the recorder, targeting the demo's dub slot.
+
+ipcMain.handle('demo-dub-begin', async (_, id) => {
+  const demo = await db.getDemo(id);
+  if (!demo) return { success: false, error: 'Demo not found' };
+  media.openDubWriter(id);
+  return { success: true };
+});
+
+ipcMain.on('demo-dub-chunk', (_, id, chunk) => {
+  media.writeDubChunk(id, chunk);
+});
+
+ipcMain.handle('demo-dub-finish', async (_, id) => {
+  const { failed } = await media.closeDubWriter(id);
+  if (failed) {
+    media.deleteDubFiles(id);
+    return { success: false, error: `Dub not saved — disk write failed (${failed})` };
+  }
+  await db.updateDemo(id, { audio_dubbed_path: media.FILES.audioDubbedSelf, audio_mode: 'dubbed' });
+  addAuditEntry('demo', `Self-recorded dub saved for demo ${id}`);
+  notifyMainWindow('demos-changed');
+  return { success: true };
+});
+
+ipcMain.handle('demo-dub-cancel', async (_, id) => {
+  await media.closeDubWriter(id);
+  media.deleteDubFiles(id);
+  await db.updateDemo(id, { audio_dubbed_path: null, audio_mode: 'original' });
+  notifyMainWindow('demos-changed');
+  return { success: true };
+});
+
+// EXPERIMENTAL — TTS "dub" of the narration. Needs a Gemini TTS-capable
+// key/model; returns a clear error if unavailable. Reads the polished script
+// when one exists, otherwise the transcript.
+ipcMain.handle('generate-demo-dub', async (_, id, opts = {}) => {
+  if (!ai.isEnabled()) return { success: false, error: 'AI is not enabled' };
+  const demo = await db.getDemo(id);
+  if (!demo) return { success: false, error: 'Demo not found' };
+  const transcript = demo.transcript || media.loadDemoTranscript(id);
+  const text = (demo.script && demo.script.plain) || (transcript && transcript.plain) || '';
+  if (!text) return { success: false, error: 'No transcript yet — generate a transcript first' };
+
+  const result = await ai.synthesizeDemoDub(text, { voice: opts.voice || 'Kore' });
+  if (!result) return { success: false, error: 'TTS unavailable (experimental — requires a Gemini TTS-capable API key)' };
+
+  const wav = media.pcmToWav(Buffer.from(result.pcmBase64, 'base64'), { sampleRate: result.sampleRate });
+  media.saveDemoDub(id, wav);
+  await db.updateDemo(id, { audio_dubbed_path: media.FILES.audioDubbed, audio_mode: opts.keepBoth ? 'both' : 'dubbed' });
+  addAuditEntry('demo', `Dub generated for demo ${id}`);
+  notifyMainWindow('demos-changed');
+  return { success: true };
+});
+
 // ── Clipboard Watcher ──
 
 function startClipboardWatcher() {
@@ -678,6 +1142,7 @@ async function rebuildTrayMenu() {
     { label: 'Open HuminLoop', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
     { label: 'Quick Capture', click: async () => await createCaptureWindow(null) },
     { label: 'Show Toolbar', click: () => createToolbarWindow() },
+    { label: 'Record Demo', click: () => { _pendingRecorderProject = null; createRecorderWindow(); } },
     { type: 'separator' },
     { label: modeLabel, click: async () => {
       const current = await getAppMode();
@@ -1546,7 +2011,12 @@ ipcMain.handle('add-custom-block', async (_, label, text) => {
 
 ipcMain.handle('get-app-version', () => {
   const pkg = require('../package.json');
-  return { version: pkg.version, electron: process.versions.electron, node: process.versions.node };
+  return {
+    version: pkg.version,
+    electron: process.versions.electron,
+    node: process.versions.node,
+    apiPort: parseInt(process.env.HUMINLOOP_API_PORT || '7277', 10),
+  };
 });
 
 // ── Audit Ledger ──
@@ -1970,6 +2440,9 @@ async function launchMainApp() {
   }
   console.log(`[HuminLoop] Database backend: ${db.getBackendName()}`);
 
+  // Grant mic/screen capture permissions the demo recorder needs.
+  configureMediaPermissions();
+
   // v2 migration: rename lite → focused
   await migrateV2();
 
@@ -2000,12 +2473,18 @@ async function launchMainApp() {
 
   // Start local HTTP API for MCP server / external tool access
   const { startApiServer } = require('./api-server');
-  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry, notifyMainWindow, proposeWorkspace, showMainWindow, initWorkflow });
+  startApiServer({ db, ai, rules, images, media, sanitizeUpdates, sanitizeDemoUpdates, autoCategorize, addAuditEntry, notifyMainWindow, proposeWorkspace, showMainWindow, initWorkflow });
 
   // Auto-purge trash items older than 30 days
   db.purgeTrash(30).then((n) => {
     if (n > 0) console.log(`[HuminLoop] Purged ${n} old trashed clip(s)`);
   }).catch((e) => console.error('[HuminLoop] Trash purge failed:', e.message));
+
+  // Auto-purge trashed demos older than 30 days (also delete their media files)
+  db.purgeDemoTrash(30).then((ids) => {
+    ids.forEach((id) => media.deleteDemoDir(id));
+    if (ids.length) console.log(`[HuminLoop] Purged ${ids.length} old demo(s)`);
+  }).catch((e) => console.error('[HuminLoop] Demo purge failed:', e.message));
 
   // One-time migration: move archived clips to trash
   db.migrateArchivedToTrash().catch((e) =>

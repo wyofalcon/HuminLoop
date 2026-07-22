@@ -2,7 +2,7 @@
 // Cross-platform: Windows (PowerShell/Win32), Linux (xdotool/gdbus)
 // Zero npm dependencies — uses native OS tools via child_process
 
-const { execSync, execFileSync } = require('child_process');
+const { execSync, execFileSync, execFile, exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -143,4 +143,41 @@ function getActiveWindow() {
   }
 }
 
-module.exports = { getActiveWindow };
+/**
+ * Async variant for polling (demo activity tracker). The sync version blocks
+ * the main-process event loop for the child process's lifetime (PowerShell
+ * startup is hundreds of ms) — fine for one-shot capture, not for polling
+ * while MediaRecorder chunks stream over IPC. Never rejects.
+ */
+function getActiveWindowAsync() {
+  return new Promise((resolve) => {
+    try {
+      if (process.platform === 'win32') {
+        ensureWindowsScript();
+        execFile('powershell', [
+          '-NoProfile', '-NoLogo', '-ExecutionPolicy', 'Bypass',
+          '-File', PS_SCRIPT_PATH,
+        ], { encoding: 'utf8', timeout: 3000, windowsHide: true }, (err, out) => {
+          if (err) return resolve(NULLS);
+          const [title, processName, processPath] = String(out).trim().split('|');
+          resolve({ title: title || null, processName: processName || null, processPath: processPath || null });
+        });
+      } else if (process.platform === 'linux' && detectLinuxMethod() === 'xdotool') {
+        // Chained: prints the active window's name, then its pid, one per line.
+        exec('xdotool getactivewindow getwindowname getwindowpid', { encoding: 'utf8', timeout: 2000 }, (err, out) => {
+          if (err) return resolve(NULLS);
+          const lines = String(out).trim().split('\n');
+          const { processName, processPath } = getProcessInfo(lines[1] && lines[1].trim());
+          resolve({ title: (lines[0] || '').trim() || null, processName, processPath });
+        });
+      } else {
+        // gdbus / unsupported: fall back to nothing rather than blocking.
+        resolve(NULLS);
+      }
+    } catch {
+      resolve(NULLS);
+    }
+  });
+}
+
+module.exports = { getActiveWindow, getActiveWindowAsync };

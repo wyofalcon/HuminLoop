@@ -1,0 +1,92 @@
+/* renderer/record.css — Demo recorder control panel */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: #13131f;
+  color: #e6e6f0;
+  font-size: 13px;
+  user-select: none;
+}
+
+.drag { -webkit-app-region: drag; }
+.nd { -webkit-app-region: no-drag; }
+
+.rec-window { display: flex; flex-direction: column; height: 100vh; }
+
+.rec-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; background: #1a1a2b; border-bottom: 1px solid #2a2a3d;
+}
+.rec-title { font-weight: 600; font-size: 13px; }
+.rec-x {
+  background: none; border: none; color: #9a9ab0; cursor: pointer;
+  font-size: 15px; padding: 2px 6px; border-radius: 4px;
+}
+.rec-x:hover { background: #2a2a3d; color: #fff; }
+
+.rec-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+
+.rec-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #8a8aa0; margin-top: 4px; }
+
+.rec-select {
+  width: 100%; padding: 8px 10px; background: #1e1e2e; color: #e6e6f0;
+  border: 1px solid #2f2f45; border-radius: 6px; font-size: 13px;
+}
+
+.rec-sources { display: flex; flex-direction: column; gap: 10px; }
+.rec-source-group { display: flex; flex-direction: column; gap: 6px; }
+.rec-group-title { font-size: 11px; color: #8a8aa0; }
+.rec-source-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.rec-source {
+  cursor: pointer; border: 2px solid transparent; border-radius: 8px;
+  overflow: hidden; background: #1e1e2e; transition: border-color 0.12s;
+}
+.rec-source:hover { border-color: #3a3a55; }
+.rec-source.selected { border-color: #7c5cff; }
+.rec-source img { width: 100%; height: 76px; object-fit: cover; display: block; background: #000; }
+.rec-source .rec-source-name {
+  font-size: 11px; padding: 4px 6px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; color: #c6c6d6;
+}
+.rec-source-empty { font-size: 12px; color: #6a6a80; padding: 8px; grid-column: 1 / -1; }
+
+.rec-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #c6c6d6; cursor: pointer; margin-top: 4px; }
+.rec-check input { width: 15px; height: 15px; accent-color: #7c5cff; }
+
+.rec-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 8px; }
+.rec-btn {
+  flex: 1; padding: 10px 12px; border: none; border-radius: 7px; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: #fff;
+}
+.rec-btn.primary { background: #7c5cff; }
+.rec-btn.primary:hover { background: #6b4ce6; }
+.rec-btn.primary:disabled { background: #3a3352; color: #8a8aa0; cursor: not-allowed; }
+.rec-btn.ghost { background: #26263a; color: #c6c6d6; }
+.rec-btn.ghost:hover { background: #30304a; }
+.rec-btn.stop { background: #e0405a; }
+.rec-btn.stop:hover { background: #c9324a; }
+.rec-btn.marker { background: #2b7a4b; flex: 0 0 auto; }
+.rec-btn.marker:hover { background: #24693f; }
+
+.rec-hint { font-size: 11px; color: #8a8aa0; line-height: 1.4; }
+.rec-error { font-size: 12px; color: #ff8a9a; background: #2a1a22; border: 1px solid #4a2530; border-radius: 6px; padding: 8px; }
+
+/* Recording view */
+.rec-live { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 18px 0 8px; }
+.rec-dot {
+  width: 14px; height: 14px; border-radius: 50%; background: #e0405a;
+  animation: pulse 1.2s infinite ease-in-out;
+}
+@keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.8); } }
+.rec-timer { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 1px; }
+.rec-speech { font-size: 12px; color: #7a7a94; padding: 3px 8px; border-radius: 10px; background: #1c1c2c; transition: color .15s, background .15s; }
+.rec-speech.speaking { color: #7ee787; background: #16281c; }
+.rec-marker-row { display: flex; align-items: center; gap: 10px; justify-content: center; }
+.rec-marker-count { font-size: 12px; color: #8a8aa0; }
+
+/* Saved view */
+.rec-saved-icon { font-size: 40px; text-align: center; padding-top: 16px; }
+.rec-saved-title { text-align: center; font-size: 16px; font-weight: 600; }

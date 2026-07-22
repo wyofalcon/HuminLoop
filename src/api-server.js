@@ -11,6 +11,7 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const stream = require('stream');
 const { URL } = require('url');
 const workflowContext = require('./workflow-context');
 
@@ -74,6 +75,59 @@ function error(res, message, status = 400) {
   json(res, { error: message }, status);
 }
 
+/**
+ * Stream a file with HTTP Range support (for <video>/<audio> seeking). Never
+ * buffers the whole file in memory — pipes a read stream to the response.
+ */
+function streamFile(req, res, filePath, size, contentType) {
+  const range = req.headers.range;
+  let opts = null;
+  if (range) {
+    const match = /bytes=(\d*)-(\d*)/.exec(range);
+    let start, end;
+    if (match && !match[1] && match[2]) {
+      // Suffix range: "bytes=-500" means the LAST 500 bytes.
+      start = Math.max(0, size - parseInt(match[2], 10));
+      end = size - 1;
+    } else {
+      start = match && match[1] ? parseInt(match[1], 10) : 0;
+      end = match && match[2] ? parseInt(match[2], 10) : size - 1;
+    }
+    if (isNaN(start) || start < 0) start = 0;
+    if (isNaN(end) || end >= size) end = size - 1;
+    if (start > end) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+      return res.end();
+    }
+    res.writeHead(206, {
+      'Content-Type': contentType,
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': end - start + 1,
+      'Cache-Control': 'no-store',
+    });
+    opts = { start, end };
+  } else {
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': size,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+    });
+  }
+  // pipeline (vs .pipe) destroys the read stream when the client disconnects —
+  // <video> seeking aborts a request per seek, which would otherwise leak an fd
+  // each time — and swallows read errors (file purged mid-stream) instead of
+  // letting an unhandled 'error' event kill the process.
+  const rs = opts ? fs.createReadStream(filePath, opts) : fs.createReadStream(filePath);
+  stream.pipeline(rs, res, (err) => {
+    if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+      console.error('[HuminLoop API] Stream error:', err.message);
+      res.destroy();
+    }
+  });
+}
+
 // ── Server ──
 
 // ── IDE Heartbeat Tracking ──
@@ -82,7 +136,7 @@ const HEARTBEAT_TIMEOUT = 60_000; // 60 seconds
 const HEARTBEAT_CHECK_INTERVAL = 15_000;
 
 function startApiServer(deps) {
-  const { db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry } = deps;
+  const { db, ai, rules, images, media, sanitizeUpdates, sanitizeDemoUpdates, autoCategorize, addAuditEntry } = deps;
   const { notifyMainWindow, proposeWorkspace, showMainWindow, initWorkflow } = deps;
 
   // Resolve a project's repo_path from a query string (?projectId=N).
@@ -255,6 +309,100 @@ function startApiServer(deps) {
       if (method === 'DELETE' && (m = matchRoute('/api/clips/:id', pathname))) {
         await db.deleteClip(m.params.id);
         addAuditEntry('delete', `Clip trashed via API: ${m.params.id}`);
+        return json(res, { success: true });
+      }
+
+      // ── Demos ──
+
+      if (method === 'GET' && pathname === '/api/demos') {
+        const projectId = url.searchParams.get('project_id');
+        const unassigned = url.searchParams.get('unassigned');
+        if (unassigned === 'true') return json(res, await db.getDemos(null));
+        if (projectId) return json(res, await db.getDemos(parseInt(projectId, 10)));
+        return json(res, await db.getDemos());
+      }
+
+      // GET /api/demos/trash — must precede /api/demos/:id (":id" would match "trash")
+      if (method === 'GET' && pathname === '/api/demos/trash') {
+        return json(res, await db.getDemoTrash());
+      }
+
+      // GET /api/demos/:id/video — range-streamed for <video> playback + seeking
+      if (method === 'GET' && (m = matchRoute('/api/demos/:id/video', pathname))) {
+        if (!media) return error(res, 'Media storage not available', 503);
+        const demo = await db.getDemo(m.params.id);
+        if (!demo || !demo.videoPath) return error(res, 'Video not found', 404);
+        const stat = media.demoFileStat(m.params.id, media.FILES.video);
+        if (!stat) return error(res, 'Video file missing on disk', 404);
+        return streamFile(req, res, stat.path, stat.size, demo.mime || 'video/webm');
+      }
+
+      // GET /api/demos/:id/audio?which=original|dubbed
+      if (method === 'GET' && (m = matchRoute('/api/demos/:id/audio', pathname))) {
+        if (!media) return error(res, 'Media storage not available', 503);
+        const demo = await db.getDemo(m.params.id);
+        if (!demo) return error(res, 'Demo not found', 404);
+        const which = url.searchParams.get('which') === 'dubbed' ? 'dubbed' : 'original';
+        // The dubbed slot's filename lives in the DB row — .wav for AI TTS,
+        // .webm for a self-recorded dub.
+        const filename = which === 'dubbed'
+          ? (demo.audioDubbedPath || media.FILES.audioDubbed)
+          : media.FILES.audioOriginal;
+        const stat = media.demoFileStat(m.params.id, filename);
+        if (!stat) return error(res, 'Audio file missing', 404);
+        return streamFile(req, res, stat.path, stat.size, media.audioMimeFor(filename));
+      }
+
+      // GET /api/demos/:id/poster — thumbnail PNG
+      if (method === 'GET' && (m = matchRoute('/api/demos/:id/poster', pathname))) {
+        if (!media) return error(res, 'Media storage not available', 503);
+        const demo = await db.getDemo(m.params.id);
+        if (!demo) return error(res, 'Demo not found', 404);
+        const stat = media.demoFileStat(m.params.id, media.FILES.poster);
+        if (!stat) return error(res, 'Poster not found', 404);
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': stat.size, 'Cache-Control': 'no-store' });
+        return stream.pipeline(fs.createReadStream(stat.path), res, () => {});
+      }
+
+      // GET /api/demos/:id
+      if (method === 'GET' && (m = matchRoute('/api/demos/:id', pathname))) {
+        const demo = await db.getDemo(m.params.id);
+        if (!demo) return error(res, 'Demo not found', 404);
+        return json(res, demo);
+      }
+
+      // PATCH /api/demos/:id — same allowlist as the IPC update-demo handler
+      if (method === 'PATCH' && (m = matchRoute('/api/demos/:id', pathname))) {
+        const demo = await db.getDemo(m.params.id);
+        if (!demo) return error(res, 'Demo not found', 404);
+        const updates = sanitizeDemoUpdates(await parseBody(req));
+        if (Object.keys(updates).length) await db.updateDemo(m.params.id, updates);
+        notifyMainWindow('demos-changed');
+        return json(res, await db.getDemo(m.params.id));
+      }
+
+      // POST /api/demos/:id/restore — un-trash
+      if (method === 'POST' && (m = matchRoute('/api/demos/:id/restore', pathname))) {
+        await db.restoreDemo(m.params.id);
+        addAuditEntry('demo', `Demo restored via API: ${m.params.id}`);
+        notifyMainWindow('demos-changed');
+        return json(res, { success: true });
+      }
+
+      // DELETE /api/demos/:id/permanent — remove row + files
+      if (method === 'DELETE' && (m = matchRoute('/api/demos/:id/permanent', pathname))) {
+        if (media) media.deleteDemoDir(m.params.id);
+        await db.permanentDeleteDemo(m.params.id);
+        addAuditEntry('demo', `Demo permanently deleted via API: ${m.params.id}`);
+        notifyMainWindow('demos-changed');
+        return json(res, { success: true });
+      }
+
+      // DELETE /api/demos/:id — soft delete (trash)
+      if (method === 'DELETE' && (m = matchRoute('/api/demos/:id', pathname))) {
+        await db.deleteDemo(m.params.id);
+        addAuditEntry('demo', `Demo trashed via API: ${m.params.id}`);
+        notifyMainWindow('demos-changed');
         return json(res, { success: true });
       }
 

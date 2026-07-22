@@ -281,6 +281,26 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'demo_list',
+    description: 'List demo recordings from HuminLoop. Filter by project_id or get unassigned demos. Returns metadata + transcript (recording itself is driven from the app UI).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: 'Filter by project ID' },
+        unassigned: { type: 'boolean', description: 'If true, return only unassigned demos' },
+      },
+    },
+  },
+  {
+    name: 'demo_get',
+    description: 'Get a single HuminLoop demo by ID, including its narration transcript, polished voice-over script (if generated), markers, detected speech segments, and the window-focus/cursor activity log captured during recording.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Demo ID' } },
+      required: ['id'],
+    },
+  },
+  {
     name: 'huminloop_health',
     description: 'Check if the HuminLoop Electron app is running and get its status.',
     inputSchema: { type: 'object', properties: {} },
@@ -398,6 +418,18 @@ const HANDLERS = {
 
   async category_list() {
     return textResult(await api('GET', '/api/categories'));
+  },
+
+  async demo_list(args) {
+    const params = new URLSearchParams();
+    if (args.project_id) params.set('project_id', args.project_id);
+    if (args.unassigned) params.set('unassigned', 'true');
+    const qs = params.toString();
+    return textResult(await api('GET', `/api/demos${qs ? '?' + qs : ''}`));
+  },
+
+  async demo_get(args) {
+    return textResult(await api('GET', `/api/demos/${encodeURIComponent(args.id)}`));
   },
 
   async huminloop_health() {

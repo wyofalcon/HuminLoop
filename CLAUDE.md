@@ -194,8 +194,8 @@ REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatic
 
 Separate Node.js process (stdio transport) that bridges AI IDE agents to HuminLoop via the HTTP API. Has its own `package.json` with `@modelcontextprotocol/sdk` dependency.
 
-**Tools (21 total):**
-- **Knowledge:** `clip_list`, `clip_get`, `clip_create`, `clip_update`, `clip_delete`, `clip_complete`, `clip_search`, `clip_summarize`, `project_list`, `project_get`, `project_create`, `category_list`, `demo_list`, `demo_get`, `huminloop_health` — proxy to HTTP API
+**Tools (22 total):**
+- **Knowledge:** `clip_list`, `clip_get`, `clip_create`, `clip_update`, `clip_delete`, `clip_complete`, `clip_search`, `clip_summarize`, `clip_combine_prompt`, `project_list`, `project_get`, `project_create`, `category_list`, `demo_list`, `demo_get`, `huminloop_health` — proxy to HTTP API
 - **Workflow:** `session_context`, `session_read`, `git_status` — run locally via `child_process`
 - **IDE Bridge:** `project_match` (auto-match workspace to HuminLoop project + return workflow context), `get_pending_prompt` (read staged IDE_PROMPT.md + image, one-shot delivery), `clip_get_prompt` (fetch clip prompt + optional image on-demand)
 

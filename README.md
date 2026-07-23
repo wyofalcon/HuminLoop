@@ -83,7 +83,7 @@ Screenshot  -->  Capture popup  -->  Rule engine auto-categorizes  -->  AI enric
 4. Gemini 2.5 Flash enriches asynchronously: summary, tags, actionable fix prompt
 5. Browse, search, filter, and act on clips in the tabbed viewer
 
-### Lite Mode — Annotate, capture, get a prompt
+### Focused Mode — Annotate, capture, get a prompt
 
 ```
 Draw on screen  -->  Take snippet  -->  Type what needs to change  -->  AI generates coding prompt
@@ -122,7 +122,7 @@ The AI understands your markup:
 
 ### Developer Workflow
 - **Send to IDE** — stage prompts + screenshots directly to your project's `.ai-workflow/context/` directory
-- **MCP Server** — 19 tools that bridge HuminLoop to Claude Code, Gemini CLI, or any MCP-compatible agent
+- **MCP Server** — 22 tools that bridge HuminLoop to Claude Code, Gemini CLI, or any MCP-compatible agent
 - **Prompt filter** — filter project clips by "Prompts Built" vs "No Prompt" to focus on what's actionable
 - **Sent-to-IDE tracking** — see which clips have already been sent to your AI coding tool
 - **Multi-clip combine** — select multiple clips and generate a unified prompt
@@ -132,9 +132,18 @@ The AI understands your markup:
 ### Project Management
 - **Project organization** with repo path auto-matching
 - **Complete/Trash system** with restore from trash
-- **Tag management** — add, remove, filter by tags
+- **Tag filtering** — add, remove, and filter clips by tags with **Any** (OR) / **All** (AND) match modes; save a tag selection as a reusable named **Tag Group** for one-click filtering
 - **Threaded comments** on any clip
 - **Summarize tracking** — clips darken progressively each time they're summarized
+
+### Project Demos
+- **Screen recording with AI narration** — record a single app window or the full screen while you narrate; Gemini 2.5 Flash turns the raw narration into a clean, timestamped voice-over script
+- **AI or self voice-over** — dub with an experimental Gemini TTS voice, or re-record in your own voice over muted playback
+- **Voice-activity detection** — a WebAudio VAD highlights the stretches where you actually spoke, with a live 🎙 indicator
+- **Activity tracking** — captures window focus + cursor travel while recording to enrich the AI script
+- **Markers** — a global hotkey (`Ctrl+Shift+M`) drops timestamped pins you can jump to on a clickable timeline reel
+- **Streaming storage & playback** — video/audio stream straight to disk (never base64-buffered) and play back over the local HTTP API with range/seek support
+- **Trash & restore** — soft-delete with a 30-day auto-purge, restorable from the Demos tab
 
 ### Infrastructure
 - **Dual database** — PostgreSQL (Docker) for power users, SQLite (built-in) for zero-setup
@@ -146,9 +155,9 @@ The AI understands your markup:
 
 ---
 
-## Full Mode vs Lite Mode
+## Full Mode vs Focused Mode
 
-| | Full Mode | Lite Mode |
+| | Full Mode | Focused Mode |
 |---|---|---|
 | **Purpose** | Capture and organize everything | Fast iteration during active dev |
 | **Tabs** | General Notes, Projects, Workflow, Settings, Help | Projects only |
@@ -157,7 +166,7 @@ The AI understands your markup:
 | **AI output** | Category, tags, summary, URL, fix prompt | Summary + focused coding prompt |
 | **Best for** | Research, triage, knowledge base | "Fix this now" during a coding session |
 
-Toggle via tray menu: right-click **Switch to Lite/Full Mode**.
+Toggle via tray menu: right-click **Switch to Focused/Full Mode**.
 
 ---
 
@@ -279,7 +288,7 @@ Uses native JWT auth — no Google SDK dependencies.
 
 ## MCP Server
 
-HuminLoop includes an MCP server (19 tools) that bridges AI IDE agents to your clip database. Works with Claude Code, Gemini CLI, or any MCP-compatible tool.
+HuminLoop includes an MCP server (22 tools) that bridges AI IDE agents to your clip database. Works with Claude Code, Gemini CLI, or any MCP-compatible tool.
 
 ```json
 {
@@ -327,13 +336,14 @@ As a rapid prototype exploring agentic context-switching, the system currently h
 * **Future Roadmap:** Upcoming iterations will introduce a confidence-score threshold before auto-generating a prompt, and a migration path toward localized, containerized models to fully eliminate external API dependency for sensitive codebase context.
 
 ```
-Renderer (5 windows + 2 overlays)    Main Process
-  index.html — tabbed notes viewer      Tray + global hotkey
-  capture.html — full capture popup     Clipboard watcher (1s poll)
-  lite-capture.html — lite capture      Window metadata capture
-  toolbar.html — floating draw bar      Background AI tasks
-  overlay.html — fullscreen annotator   HTTP API (localhost:7277)
-  setup.html — first-run wizard         Mode switching (full/lite)
+Renderer (5 windows + 2 overlays)      Main Process
+  index.html — tabbed notes viewer       Tray + global hotkey
+  capture.html — full capture popup      Clipboard watcher (1s poll)
+  focused-capture.html — focused capture Window metadata capture
+  record.html — demo screen recorder     Background AI tasks
+  toolbar.html — floating draw bar       Demo activity tracker
+  overlay.html — fullscreen annotator    HTTP API (localhost:7277)
+  setup.html — first-run wizard          Mode switching (full/focused)
          |                                     |
          +-------- IPC (preload.js) -----------+
                                                |
@@ -342,6 +352,7 @@ Renderer (5 windows + 2 overlays)    Main Process
                                     ai.js -> Gemini 2.5 Flash
                                     rules.js -> 7-strategy chain
                                     api-server.js -> REST API
+                                    media.js -> demo video/audio
                                     window-info.js -> OS-native
 ```
 
@@ -352,7 +363,7 @@ Renderer (5 windows + 2 overlays)    Main Process
 | AI | Gemini 2.5 Flash (API key or Vertex AI with native JWT) |
 | Rules | 7-strategy priority chain with 5-min cache |
 | Build | electron-builder (NSIS, AppImage, deb, dmg) |
-| MCP | stdio transport, 19 tools, container-aware |
+| MCP | stdio transport, 22 tools, container-aware |
 
 ---
 
@@ -407,6 +418,7 @@ huminloop/
 │   ├── rules.js           # 7-strategy categorization engine
 │   ├── api-server.js      # Local HTTP API (port 7277)
 │   ├── window-info.js     # OS-native window capture
+│   ├── media.js           # demo video/audio storage (streaming disk writers)
 │   └── images.js / workflow-context.js
 ├── renderer/              # 5 windows + 2 overlays
 ├── mcp-server/            # MCP server (separate package)

@@ -24,7 +24,11 @@ const IS_CONTAINER = process.env.REMOTE_CONTAINERS === 'true'
   || require('fs').existsSync('/.dockerenv');
 const API_HOST = process.env.HUMINLOOP_API_HOST || (IS_CONTAINER ? 'host.docker.internal' : '127.0.0.1');
 const API_BASE = `http://${API_HOST}:${API_PORT}`;
+// Accept both env names: the app's config writer historically emitted
+// PROJECT_ROOT while this server read HUMINLOOP_PROJECT_ROOT — honor either so
+// already-generated configs keep working.
 const PROJECT_ROOT = process.env.HUMINLOOP_PROJECT_ROOT
+  || process.env.PROJECT_ROOT
   || (() => { try { return execSync('git rev-parse --show-toplevel', { encoding: 'utf-8' }).trim(); } catch { return process.cwd(); } })();
 
 // ── HTTP helpers ──
@@ -40,9 +44,17 @@ async function api(method, path, body) {
   } catch (e) {
     throw new Error(`HuminLoop app not reachable at ${API_BASE} — is it running? (${e.message})`);
   }
-  const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-  return data;
+  if (!resp.ok) {
+    let detail = '';
+    try {
+      const text = await resp.text();
+      try { detail = JSON.parse(text).error || text; } catch { detail = text; }
+    } catch {}
+    const err = new Error(detail || `HTTP ${resp.status}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
 }
 
 // ── MCP Tool Result helpers ──
@@ -61,7 +73,12 @@ function imageContent(base64, mimeType = 'image/png') {
 
 // ── Project Matching ──
 
-let _cachedProject = undefined;
+let _cachedProject = undefined; // undefined = never checked, null = no match yet
+let _lastMissAt = 0;
+// A miss is retried after a short TTL so linking the project mid-session (via
+// project_link, the app's registration toast, or the project Edit dialog)
+// takes effect without restarting the IDE. A hit is cached for the session.
+const MISS_RETRY_MS = 30_000;
 const _proposedThisSession = new Set();
 
 // Canonicalize a path for cross-environment comparison. Handles:
@@ -71,21 +88,28 @@ const _proposedThisSession = new Set();
 //   - WSL UNC paths from Windows: \\wsl.localhost\<distro>\... or \\wsl$\<distro>\...
 //     normalize to the underlying Linux path so a Windows-side MCP and a
 //     Linux-side project repo_path resolve to the same canonical form
+// Mirrors src/repo-path.js canonicalRepoPath() — keep the two in sync
+// (quote stripping, .code-workspace stripping, WSL UNC → Linux path, lowercase).
 function normalizePath(p) {
   if (!p) return '';
-  let out = p.replace(/\\/g, '/').replace(/\/[^/]+\.code-workspace$/i, '').replace(/\/+$/, '');
+  let out = String(p).replace(/^["']|["']$/g, '').trim();
+  out = out.replace(/\\/g, '/').replace(/\/[^/]+\.code-workspace$/i, '').replace(/\/+$/, '');
   const wslMatch = out.match(/^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+(\/.*)?$/i);
   if (wslMatch) out = wslMatch[1] || '/';
   return out.toLowerCase();
 }
 
 async function matchProject() {
-  if (_cachedProject !== undefined) return _cachedProject;
+  if (_cachedProject) return _cachedProject;
+  if (_cachedProject === null && Date.now() - _lastMissAt < MISS_RETRY_MS) return null;
   const projects = await api('GET', '/api/projects');
   const target = normalizePath(PROJECT_ROOT);
   const match = projects.find(p => p.repo_path && normalizePath(p.repo_path) === target);
   _cachedProject = match || null;
-  if (!match) proposeWorkspaceOnce(PROJECT_ROOT).catch(() => {});
+  if (!match) {
+    _lastMissAt = Date.now();
+    proposeWorkspaceOnce(PROJECT_ROOT).catch(() => {});
+  }
   return _cachedProject;
 }
 
@@ -94,7 +118,8 @@ async function proposeWorkspaceOnce(root) {
   if (_proposedThisSession.has(key)) return;
   _proposedThisSession.add(key);
   const name = root.replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).pop() || 'Workspace';
-  try { await api('POST', '/api/workspace/propose', { root, name }); } catch { /* viewer may be closed */ }
+  try { await api('POST', '/api/workspace/propose', { root, name }); }
+  catch (e) { process.stderr.write(`[HuminLoop MCP] workspace propose failed: ${e.message}\n`); }
 }
 
 // ── IDE Heartbeat ──
@@ -119,13 +144,23 @@ const _agentName = detectAgent();
 const os = require('os');
 const _sessionId = `${os.hostname()}-${process.pid}-${PROJECT_ROOT.replace(/[^a-z0-9]/gi, '').slice(-16)}`;
 
-let _heartbeatRejected = false;
+// A 409 (another IDE owns the project) pauses heartbeats for a back-off window
+// rather than forever — after the owner disconnects and its claim expires, this
+// session can re-claim on the next attempt.
+const HEARTBEAT_REJECT_BACKOFF_MS = 90_000;
+// The app expires claims after 60s of silence; a keep-alive well under that
+// stops the "IDE connected" indicator from flapping while the agent is idle.
+const HEARTBEAT_KEEPALIVE_MS = 25_000;
+let _heartbeatRejectedAt = 0;
+let _heartbeatTimer = null;
 
 async function sendHeartbeat() {
-  if (_heartbeatRejected) return;
+  if (_heartbeatRejectedAt && Date.now() - _heartbeatRejectedAt < HEARTBEAT_REJECT_BACKOFF_MS) return;
+  _heartbeatRejectedAt = 0;
   try {
     const project = await matchProject();
     if (!project) return;
+    startHeartbeatKeepalive();
     const url = `${API_BASE}/api/projects/${project.id}/heartbeat`;
     const resp = await fetch(url, {
       method: 'POST',
@@ -133,13 +168,26 @@ async function sendHeartbeat() {
       body: JSON.stringify({ ide: _agentName, session_id: _sessionId }),
     });
     if (resp.status === 409) {
-      _heartbeatRejected = true;
+      _heartbeatRejectedAt = Date.now();
       try {
         const data = await resp.json();
-        process.stderr.write(`[HuminLoop MCP] Project already claimed by another IDE session (${data.owner_ide || 'unknown'}). Heartbeats suppressed.\n`);
+        process.stderr.write(`[HuminLoop MCP] Project already claimed by another IDE session (${data.owner_ide || 'unknown'}). Retrying in ${HEARTBEAT_REJECT_BACKOFF_MS / 1000}s.\n`);
       } catch {}
+    } else if (resp.status === 404) {
+      // Project row is gone (deleted/recreated) — drop the match cache so the
+      // next call re-resolves instead of 404ing forever.
+      _cachedProject = undefined;
+      process.stderr.write('[HuminLoop MCP] Matched project no longer exists — re-matching on next call.\n');
     }
-  } catch { /* heartbeat is best-effort */ }
+  } catch (e) {
+    process.stderr.write(`[HuminLoop MCP] heartbeat failed: ${e.message}\n`);
+  }
+}
+
+function startHeartbeatKeepalive() {
+  if (_heartbeatTimer) return;
+  _heartbeatTimer = setInterval(() => { sendHeartbeat(); }, HEARTBEAT_KEEPALIVE_MS);
+  if (_heartbeatTimer.unref) _heartbeatTimer.unref();
 }
 
 // ── Tool Definitions ──
@@ -243,7 +291,7 @@ const TOOLS = [
     description: 'Combine multiple HuminLoop clips into a single unified AI prompt.',
     inputSchema: {
       type: 'object',
-      properties: { clip_ids: { type: 'array', items: { type: 'number' }, description: 'Array of clip IDs to combine' } },
+      properties: { clip_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Array of clip IDs to combine (clip IDs are strings)' } },
       required: ['clip_ids'],
     },
   },
@@ -330,6 +378,17 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'project_link',
+    description: 'Link the current workspace to an existing HuminLoop project by setting its repo_path. Use when project_match finds no match but a project for this codebase already exists (check project_list). Enables workflow sync: context, staged prompts, IDE heartbeats.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'Project name or numeric project ID to link to this workspace' },
+      },
+      required: ['project'],
+    },
+  },
+  {
     name: 'get_pending_prompt',
     description: 'Read a pending IDE prompt staged by HuminLoop. Returns prompt text and optional screenshot image. Files are cleared after reading (one-shot delivery).',
     inputSchema: { type: 'object', properties: {} },
@@ -401,7 +460,9 @@ const HANDLERS = {
   },
 
   async clip_combine_prompt(args) {
-    return textResult(await api('POST', '/api/ai/combine', { clipIds: args.clip_ids }));
+    // Clip IDs are TEXT in the DB — coerce so numeric input still matches.
+    const clipIds = (args.clip_ids || []).map(String);
+    return textResult(await api('POST', '/api/ai/combine', { clipIds }));
   },
 
   async project_list() {
@@ -449,7 +510,7 @@ const HANDLERS = {
     const behind = git('git rev-list HEAD..@{u} --count 2>/dev/null') || '0';
 
     const staged = status.split('\n').filter(l => l && !l.startsWith('?') && !l.startsWith(' ')).length;
-    const unstaged = status.split('\n').filter(l => l && l[1] === 'M').length;
+    const unstaged = status.split('\n').filter(l => l && !l.startsWith('??') && l[1] && l[1] !== ' ').length;
     const untracked = status.split('\n').filter(l => l.startsWith('??')).length;
 
     return textResult({
@@ -478,7 +539,7 @@ const HANDLERS = {
 
   async project_match() {
     const project = await matchProject();
-    if (!project) return textResult({ matched: false, project_root: PROJECT_ROOT, message: 'No HuminLoop project matches this workspace. Create one with a repo_path matching: ' + PROJECT_ROOT });
+    if (!project) return textResult({ matched: false, project_root: PROJECT_ROOT, message: 'No HuminLoop project matches this workspace. Link an existing project with the project_link tool (see project_list), or create one with a repo_path matching: ' + PROJECT_ROOT });
 
     // Read local workflow context files
     const ctxDir = path.join(PROJECT_ROOT, '.ai-workflow', 'context');
@@ -487,6 +548,22 @@ const HANDLERS = {
     try { auditLog = fs.readFileSync(path.join(ctxDir, 'AUDIT_LOG.md'), 'utf-8').trim(); } catch {}
 
     return textResult({ matched: true, project, session, auditLog });
+  },
+
+  async project_link(args) {
+    const ref = String(args.project || '').trim();
+    if (!ref) return errorResult('project (name or ID) is required');
+    const projects = await api('GET', '/api/projects');
+    const target = projects.find(p => String(p.id) === ref)
+      || projects.find(p => (p.name || '').toLowerCase() === ref.toLowerCase());
+    if (!target) return errorResult(`No project named or numbered "${ref}". Use project_list to see available projects.`);
+    if (target.repo_path && normalizePath(target.repo_path) !== normalizePath(PROJECT_ROOT)) {
+      return errorResult(`Project "${target.name}" is already linked to ${target.repo_path}. Relink it from the HuminLoop app (project Edit dialog) if that path is wrong.`);
+    }
+    const updated = await api('PATCH', `/api/projects/${target.id}`, { repo_path: PROJECT_ROOT });
+    _cachedProject = updated; // future matchProject() calls see the link immediately
+    sendHeartbeat();
+    return textResult({ linked: true, project: { id: updated.id, name: updated.name, repo_path: updated.repo_path } });
   },
 
   async get_pending_prompt() {
@@ -586,7 +663,7 @@ const HANDLERS = {
           const base64 = imgData.image.replace(/^data:image\/\w+;base64,/, '');
           content.push(imageContent(base64, 'image/png'));
         }
-      } catch {}
+      } catch (e) { process.stderr.write(`[HuminLoop MCP] clip image fetch failed: ${e.message}\n`); }
     }
 
     return { content };

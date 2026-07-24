@@ -422,6 +422,8 @@ function renderGeneralSidebar(el) {
   html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
     &#x1F5D1; Trash</button>`;
 
+  html += renderWorkspacesSection();
+
   el.innerHTML = html;
 }
 
@@ -504,6 +506,8 @@ function renderProjectsSidebar(el) {
   html += '<div class="sec" style="margin-top:12px">Trash</div>';
   html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
     &#x1F5D1; Trash</button>`;
+
+  html += renderWorkspacesSection();
 
   el.innerHTML = html;
 }
@@ -773,9 +777,10 @@ function renderProjectDetailWorkflow(el, proj) {
       ${ideActive ? `<span class="ide-badge" title="${esc(proj.ide || 'IDE')} connected">IN IDE${proj.ide ? ' · ' + esc(proj.ide) : ''}</span>` : ''}
     </div>
     <div class="project-detail-actions">
-      <span class="sb-btn-action ${ideActive ? 'ide-active' : ''}" title="${ideActive ? 'Connected via MCP' : 'No active IDE connection'}" style="cursor:default;opacity:${ideActive ? '1' : '0.5'}">
-        ${ideActive ? '&#x1F7E2; Connected' : '&#x26AA; Not Connected'}
-      </span>
+      ${renderWorkspacePinButton(proj)}
+      ${ideActive
+        ? `<span class="sb-btn-action ide-active" title="Connected via MCP" style="cursor:default">&#x1F7E2; Connected</span>`
+        : `<button class="sb-btn-action" onclick="openIdeConnect(${proj.id})" title="Pick the VS Code window that has this project open">&#x1F50C; Connect IDE&hellip;</button>`}
     </div>
   </div>`;
   html += renderProjectTabStrip('workflow');
@@ -1397,7 +1402,13 @@ async function initWorkflowForProject(projectId) {
       showToast(`Initialization failed: ${reason}`);
       return;
     }
-    showToast('Workflow initialized');
+    if (result.repaired) {
+      showToast(result.repaired.length
+        ? `Workflow repaired: ${result.repaired.join(', ')}`
+        : 'Workflow already set up — nothing missing');
+    } else {
+      showToast('Workflow initialized');
+    }
     await loadWorkflowData(projectId);
     renderAll();
   } catch (e) {
@@ -3459,6 +3470,244 @@ function renderIdeConnectionSection() {
   return html;
 }
 
+// ── Connect IDE Window Wizard ──
+// Lets the user point HuminLoop at the VS Code window that has this project
+// open. Verification (folder ↔ repo_path) happens in main; the actual
+// "Connected" state still comes only from MCP heartbeats — the wizard just
+// guides the user there (MCP setup → reload window → heartbeat arrives).
+
+let _ideConnect = null; // { projectId, step, windows, chosen, verdict, ideStatus, poll }
+
+// Display-only helper; the authoritative comparison lives in main's connect-ide-window.
+function projectRepoBase(proj) {
+  if (!proj || !proj.repo_path) return null;
+  const norm = String(proj.repo_path).replace(/\\/g, '/').replace(/\/+$/, '');
+  return norm.split('/').pop() || null;
+}
+
+async function openIdeConnect(projectId) {
+  closeIdeConnect();
+  _ideConnect = { projectId, step: 'loading', windows: [], chosen: null, verdict: null, ideStatus: null, poll: null };
+  renderIdeConnectOverlay();
+  await refreshIdeWindows();
+}
+
+async function refreshIdeWindows() {
+  const st = _ideConnect;
+  if (!st) return;
+  st.step = 'loading';
+  renderIdeConnectOverlay();
+  let wins = [];
+  try { wins = await window.quickclip.listIdeWindows(); } catch {}
+  if (_ideConnect !== st) return; // closed/reopened while scanning
+  st.windows = wins || [];
+  st.step = 'pick';
+  renderIdeConnectOverlay();
+}
+
+function closeIdeConnect() {
+  if (_ideConnect && _ideConnect.poll) clearInterval(_ideConnect.poll);
+  _ideConnect = null;
+  const el = document.getElementById('ide-connect-overlay');
+  if (el) el.remove();
+}
+
+async function chooseIdeWindow(index) {
+  const st = _ideConnect;
+  if (!st) return;
+  const win = st.windows[index];
+  if (!win) return;
+  st.chosen = win;
+  let verdict = null;
+  try { verdict = await window.quickclip.connectIdeWindow(st.projectId, win); } catch (e) { verdict = { error: e.message }; }
+  if (_ideConnect !== st) return;
+  if (verdict && verdict.error) { showToast(verdict.error); return; }
+  st.verdict = verdict;
+  if (verdict.match === 'yes') startIdeCheck();
+  else { st.step = 'warn'; renderIdeConnectOverlay(); }
+}
+
+async function startIdeCheck() {
+  const st = _ideConnect;
+  if (!st) return;
+  st.step = 'check';
+  renderIdeConnectOverlay();
+  const proj = projects.find((p) => p.id === st.projectId);
+  try { st.ideStatus = await window.quickclip.detectIde(proj?.repo_path); } catch { st.ideStatus = null; }
+  if (_ideConnect !== st || st.step !== 'check') return;
+  renderIdeConnectOverlay();
+  // Poll until the MCP heartbeat flips active_in_ide (set by api-server, not by us).
+  if (!st.poll) {
+    st.poll = setInterval(async () => {
+      const cur = _ideConnect;
+      if (!cur || cur !== st || cur.step !== 'check') return;
+      try {
+        const fresh = await window.quickclip.getProjects();
+        const p = fresh.find((x) => x.id === cur.projectId);
+        if (p && (p.active_in_ide || p.activeInIde)) {
+          clearInterval(cur.poll);
+          cur.poll = null;
+          cur.step = 'done';
+          renderIdeConnectOverlay();
+        }
+      } catch {}
+    }, 3000);
+  }
+}
+
+function ideConnectPinSuggestion(proj) {
+  if (!proj || !proj.repo_path || isWorkspacePinned(proj.id)) return '';
+  return `<div class="ide-connect-pin">
+    <span>Create a workspace shortcut to launch <strong>${esc(proj.name)}</strong> from the sidebar anytime.</span>
+    <button class="btn-secondary" onclick="toggleWorkspacePin(${proj.id});renderIdeConnectOverlay()">&#x2606; Add to Workspaces</button>
+  </div>`;
+}
+
+function renderIdeConnectOverlay() {
+  const st = _ideConnect;
+  if (!st) return;
+  let el = document.getElementById('ide-connect-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'ide-connect-overlay';
+    el.className = 'mcp-setup-overlay';
+    document.body.appendChild(el);
+  }
+  const proj = projects.find((p) => p.id === st.projectId) || {};
+  const repoBase = projectRepoBase(proj);
+  let body = '';
+
+  if (st.step === 'loading') {
+    body = `<h3>Connect to VS Code</h3><p class="ide-connect-hint">Looking for open VS Code windows&hellip;</p>
+      <div class="mcp-setup-actions"><button class="btn-secondary" onclick="closeIdeConnect()">Cancel</button></div>`;
+
+  } else if (st.step === 'pick') {
+    body = `<h3>Connect to VS Code</h3>
+      <p class="ide-connect-hint">Pick the window that has <strong>${esc(proj.name || 'this project')}</strong> open:</p>`;
+    if (st.windows.length === 0) {
+      body += `<p class="ide-connect-empty">No open VS Code windows found.<br>Open your project in VS Code, then hit Refresh.</p>`;
+    } else {
+      body += '<div class="ide-win-list">';
+      st.windows.forEach((w, i) => {
+        const likely = repoBase && w.folder && w.folder.toLowerCase() === repoBase.toLowerCase();
+        body += `<button class="ide-win-row ${likely ? 'likely' : ''}" onclick="chooseIdeWindow(${i})" title="${escAttr(w.title)}">
+          <span class="ide-win-folder">&#x1F4C1; ${esc(w.folder)}${w.remote ? ` <span class="ide-win-remote">${esc(w.remote)}</span>` : ''}${likely ? ' <span class="ide-win-likely">likely match</span>' : ''}</span>
+          <span class="ide-win-title">${esc(w.title)}</span>
+        </button>`;
+      });
+      body += '</div>';
+    }
+    body += `<div class="mcp-setup-actions">
+      <button class="btn-secondary" onclick="refreshIdeWindows()">&#x21BB; Refresh</button>
+      <button class="btn-secondary" onclick="closeIdeConnect()">Cancel</button>
+    </div>`;
+
+  } else if (st.step === 'warn') {
+    const v = st.verdict || {};
+    body = `<h3>Hmm, are you sure?</h3>`;
+    if (v.match === 'no') {
+      body += `<p class="ide-connect-warn">&#x26A0;&#xFE0F; This may not be the correct project/path &mdash; that window has
+        <strong>${esc(v.folder || '?')}</strong> open, but this project's repo folder is
+        <strong>${esc(v.repoBase || '?')}</strong>${proj.repo_path ? ` <span class="ide-win-title">(${esc(proj.repo_path)})</span>` : ''}.</p>`;
+    } else {
+      body += `<p class="ide-connect-warn">&#x26A0;&#xFE0F; HuminLoop can't verify this window &mdash; ${proj.repo_path ? 'the window title has no folder name' : `<strong>${esc(proj.name || 'this project')}</strong> has no repo path set. Add one in the project settings to enable verification and MCP setup`}.</p>`;
+    }
+    body += `<div class="mcp-setup-actions">
+      <button class="btn-primary" onclick="startIdeCheck()">Connect anyway</button>
+      <button class="btn-secondary" onclick="_ideConnect.step='pick';renderIdeConnectOverlay()">Pick another window</button>
+      <button class="btn-secondary" onclick="closeIdeConnect()">Cancel</button>
+    </div>`;
+
+  } else if (st.step === 'check') {
+    const s = st.ideStatus;
+    const row = (ok, label) => `<div class="ide-check-row">${ok === null ? '&#x23F3;' : ok ? '&#x2705;' : '&#x274C;'} ${label}</div>`;
+    body = `<h3>Checking IDE &amp; MCP</h3>
+      <div class="ide-check-list">
+        ${row(s ? s.vsCodeInstalled : null, 'VS Code CLI available')}
+        ${row(s ? s.claudeCodeExtension : null, 'Claude Code extension installed')}
+        ${row(s ? s.mcpConfigured : null, 'HuminLoop MCP configured for this repo')}
+        <div class="ide-check-row">&#x1F4E1; Waiting for MCP heartbeat&hellip; <span class="ide-win-title">(reload the VS Code window / start your AI agent so the MCP server connects)</span></div>
+      </div>`;
+    if (s && !s.mcpConfigured && proj.repo_path) {
+      body += `<p class="ide-connect-hint">The MCP bridge isn't set up yet &mdash; want HuminLoop to configure it?</p>`;
+    }
+    body += ideConnectPinSuggestion(proj);
+    body += `<div class="mcp-setup-actions">
+      ${s && !s.mcpConfigured && proj.repo_path ? `<button class="btn-primary" onclick="showMcpSetup(${proj.id})">Set up MCP connection</button>` : ''}
+      <button class="btn-secondary" onclick="startIdeCheck()">&#x21BB; Re-check</button>
+      <button class="btn-secondary" onclick="closeIdeConnect()">Close</button>
+    </div>`;
+
+  } else if (st.step === 'done') {
+    body = `<h3>&#x1F7E2; Connected!</h3>
+      <p class="ide-connect-hint">VS Code is talking to HuminLoop via MCP. Prompts you send from clips will land in this workspace.</p>
+      <p class="ide-connect-hint">&#x1F43A; <strong>Meet Rel</strong> &mdash; your AI workflow assistant. He can look over this repo, answer questions, and help set up your workflow.</p>`;
+    body += ideConnectPinSuggestion(proj);
+    body += `<div class="mcp-setup-actions">
+      <button class="btn-primary" onclick="closeIdeConnect();renderAll();window.quickclip.openRel(${proj.id})">&#x1F43A; Meet Rel</button>
+      <button class="btn-secondary" onclick="closeIdeConnect();renderAll()">Done</button>
+    </div>`;
+  }
+
+  el.innerHTML = `<div class="mcp-setup-panel ide-connect-panel">${body}</div>`;
+}
+
+// ── Rel (in-app AI assistant) ──
+
+// Header-button entry: open Rel with the currently selected project (if any)
+// so he starts with the right repo context.
+function openRelChat() {
+  window.quickclip.openRel(selectedProjectId || null);
+}
+
+// ── Workspaces Quick Launch ──
+
+function isWorkspacePinned(projectId) {
+  const pins = (settings && settings.workspace_quick_launch) || [];
+  return pins.includes(projectId);
+}
+
+function renderWorkspacePinButton(proj) {
+  if (!proj.repo_path) return '';
+  const pinned = isWorkspacePinned(proj.id);
+  return `<button class="sb-btn-action ${pinned ? 'ws-pinned' : ''}" onclick="toggleWorkspacePin(${proj.id})" title="${pinned ? 'Remove from Workspaces quick launch' : 'Add to Workspaces quick launch in the sidebar'}">${pinned ? '&#x2605;' : '&#x2606;'} Workspace</button>`;
+}
+
+async function toggleWorkspacePin(projectId) {
+  const pins = ((settings && settings.workspace_quick_launch) || []).slice();
+  const i = pins.indexOf(projectId);
+  if (i >= 0) pins.splice(i, 1); else pins.push(projectId);
+  settings.workspace_quick_launch = pins;
+  try { await window.quickclip.saveSetting('workspace_quick_launch', pins); } catch {}
+  showToast(i >= 0 ? 'Removed from Workspaces' : 'Added to Workspaces quick launch');
+  renderAll();
+}
+
+function renderWorkspacesSection() {
+  const pins = (settings && settings.workspace_quick_launch) || [];
+  const pinned = pins.map((id) => projects.find((p) => p.id === id)).filter(Boolean);
+  if (pinned.length === 0) return '';
+  let html = '<div class="sec" style="margin-top:12px">Workspaces</div>';
+  pinned.forEach((p) => {
+    const ide = (p.active_in_ide || p.activeInIde) ? ' <span class="ide-dot" title="Connected via MCP">&#x1F7E2;</span>' : '';
+    html += `<button class="sb-btn ws-launch" onclick="launchWorkspace(${p.id})" title="Open ${escAttr(p.name)} in VS Code">
+      <span><span class="proj-dot" style="background:${esc(p.color)}"></span>&#x25B6;&#xFE0E; ${esc(p.name)}${ide}</span>
+      <span class="ws-unpin" onclick="event.stopPropagation();toggleWorkspacePin(${p.id})" title="Remove from Workspaces">&times;</span></button>`;
+  });
+  return html;
+}
+
+async function launchWorkspace(projectId) {
+  const p = projects.find((x) => x.id === projectId);
+  showToast(`Opening ${p ? p.name : 'workspace'} in VS Code…`);
+  try {
+    const res = await window.quickclip.openProjectWorkspace(projectId);
+    if (res && res.error) showToast(res.error);
+  } catch (e) {
+    showToast('Could not launch VS Code: ' + e.message);
+  }
+}
+
 // ── Dev Workflow Functions ──
 
 async function initDevWorkflow(projectId) {
@@ -3467,8 +3716,8 @@ async function initDevWorkflow(projectId) {
     if (result.success) {
       await loadData();
       renderAll();
-    } else if (result.reason === 'already_exists') {
-      showToast('Dev workflow already exists for this project.');
+    } else {
+      showToast(`Workflow setup failed: ${result.reason || 'unknown'}`);
     }
   } catch (e) {
     alert('Failed to initialize dev workflow: ' + e.message);

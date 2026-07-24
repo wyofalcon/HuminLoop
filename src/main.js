@@ -19,10 +19,13 @@ if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) {
 const db = require('./db');
 const ai = require('./ai');
 const rules = require('./rules');
-const { getActiveWindow, getActiveWindowAsync } = require('./window-info');
+const { getActiveWindow, getActiveWindowAsync, listIDEWindows } = require('./window-info');
 const images = require('./images');
 const media = require('./media');
 const workflowContext = require('./workflow-context');
+const { normalizeRepoPath, repoPathsEqual, canonicalRepoPath } = require('./repo-path');
+const rel = require('./rel');
+const { createAppWindow } = require('./window-factory');
 
 // ── Prompt ID Generation ──
 let batchLetter = 0; // 0=a, 1=b, etc. Resets on restart.
@@ -870,6 +873,81 @@ ipcMain.handle('get-recorder-context', async () => {
   return { projectId: projectId || null, projects, markerHotkey: MARKER_HOTKEY, aiEnabled: ai.isEnabled() };
 });
 
+// ── Rel (RelliK Wolf-Krow) — in-app AI assistant window ──
+
+let relWindow = null;
+let _pendingRelProject = null;
+
+function createRelWindow(projectId) {
+  if (projectId != null) _pendingRelProject = projectId;
+  if (relWindow && !relWindow.isDestroyed()) {
+    relWindow.show();
+    relWindow.focus();
+    if (projectId != null) relWindow.webContents.send('rel-event', { kind: 'project-changed', projectId });
+    return;
+  }
+  const width = 720, height = 640;
+  // Center over the main window when it's visible; otherwise center on the
+  // active display so tray-launched chats land where the user is working.
+  let x, y;
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+    const b = mainWindow.getBounds();
+    x = Math.round(b.x + (b.width - width) / 2);
+    y = Math.round(b.y + (b.height - height) / 2);
+  } else {
+    const area = activeCaptureWorkArea();
+    x = Math.round(area.x + (area.width - width) / 2);
+    y = Math.round(area.y + (area.height - height) / 2);
+  }
+  relWindow = createAppWindow({
+    file: 'rel.html',
+    width, height, x, y,
+    minWidth: 420, minHeight: 380,
+    title: 'HuminLoop — Rel',
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+  });
+  relWindow.setAlwaysOnTop(true, 'floating');
+  relWindow.on('closed', () => { relWindow = null; });
+}
+
+function sendRelEvent(event) {
+  if (relWindow && !relWindow.isDestroyed()) relWindow.webContents.send('rel-event', event);
+}
+
+ipcMain.on('open-rel', (_, projectId) => {
+  createRelWindow(projectId != null ? projectId : null);
+});
+
+ipcMain.on('close-rel', () => {
+  if (relWindow && !relWindow.isDestroyed()) relWindow.close();
+});
+
+ipcMain.handle('get-rel-context', async () => {
+  const projects = await db.getProjects();
+  let projectId = _pendingRelProject;
+  if (!projectId) {
+    const mode = await getAppMode();
+    if (mode === 'focused') projectId = await db.getSettings('focused_active_project');
+  }
+  const relConfig = await rel.getConfig();
+  return { projectId: projectId || null, projects, relConfig, status: rel.getStatus() };
+});
+
+ipcMain.handle('rel-send', async (_, { projectId, text }) => {
+  const project = projectId != null ? await db.getProject(projectId) : null;
+  // Fire-and-stream: events reach the window via 'rel-event'; the invoke
+  // resolves immediately so the renderer isn't blocked for the whole turn.
+  rel.startTurn({ project, prompt: text }, sendRelEvent).catch((e) => {
+    sendRelEvent({ kind: 'status', state: 'error', detail: e.message });
+  });
+  return { started: true };
+});
+
+ipcMain.on('rel-interrupt', () => { rel.interrupt(); });
+
 // Enumerate screens + windows so the recorder UI can offer "entire screen" vs
 // "this app / a window" without invoking the OS picker.
 ipcMain.handle('get-recording-sources', async () => {
@@ -1143,6 +1221,7 @@ async function rebuildTrayMenu() {
     { label: 'Quick Capture', click: async () => await createCaptureWindow(null) },
     { label: 'Show Toolbar', click: () => createToolbarWindow() },
     { label: 'Record Demo', click: () => { _pendingRecorderProject = null; createRecorderWindow(); } },
+    { label: 'Ask Rel', click: () => { _pendingRelProject = null; createRelWindow(); } },
     { type: 'separator' },
     { label: modeLabel, click: async () => {
       const current = await getAppMode();
@@ -1506,18 +1585,6 @@ ipcMain.handle('get-projects', () => db.getProjects());
 ipcMain.handle('get-project', (_, id) => db.getProject(id));
 
 // Normalize repo_path: strip quotes from "Copy as Path", strip .code-workspace filename
-function normalizeRepoPath(p) {
-  if (!p) return p;
-  p = p.replace(/^["']|["']$/g, '').trim(); // strip wrapping quotes
-  p = p.replace(/[\\/][^\\/]+\.code-workspace$/i, ''); // strip workspace file
-  // WSL UNC paths from Windows tooling resolve to the same place as the Linux
-  // path. Canonicalize to the Linux form so a Windows-side MCP and a Linux-side
-  // capture both match the same project row.
-  const wslMatch = p.replace(/\\/g, '/').match(/^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+(\/.*)?$/i);
-  if (wslMatch) p = wslMatch[1] || '/';
-  return p;
-}
-
 ipcMain.handle('create-project', async (_, data) => {
   if (data.repo_path) data.repo_path = normalizeRepoPath(data.repo_path);
   const project = await db.createProject(data);
@@ -1539,17 +1606,16 @@ async function getIgnoredWorkspacePaths() {
 }
 
 async function isWorkspaceIgnored(repoPath) {
-  const norm = normalizeRepoPath(repoPath).toLowerCase();
+  const norm = canonicalRepoPath(repoPath);
   const ignored = await getIgnoredWorkspacePaths();
-  return ignored.some(p => p.toLowerCase() === norm);
+  return ignored.some(p => canonicalRepoPath(p) === norm);
 }
 
 async function proposeWorkspace({ root, name }) {
   if (!root) return { proposed: false, reason: 'missing root' };
   const repoPath = normalizeRepoPath(root);
   const projects = await db.getProjects();
-  const norm = p => (p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-  const existing = projects.find(p => p.repo_path && norm(p.repo_path) === norm(repoPath));
+  const existing = projects.find(p => repoPathsEqual(p.repo_path, repoPath));
   if (existing) return { proposed: false, matched: true, project: existing };
 
   if (await isWorkspaceIgnored(repoPath)) return { proposed: false, ignored: true };
@@ -1569,11 +1635,24 @@ ipcMain.handle('register-workspace', async (_, data) => {
   const repoPath = normalizeRepoPath(data?.root || '');
   if (!repoPath) return null;
   const name = data?.name || repoPath.split(/[\\/]/).filter(Boolean).pop() || 'Untitled';
-  const project = await db.createProject({ name, repo_path: repoPath });
+  const projects = await db.getProjects();
+  let project = projects.find(p => repoPathsEqual(p.repo_path, repoPath));
+  if (!project) {
+    // A project with the same name and no repo_path yet is almost certainly this
+    // workspace (e.g. created by hand, or repo_path lost in a backend migration) —
+    // link it instead of creating a duplicate that would strand its clips.
+    const sameName = projects.find(p => !p.repo_path && (p.name || '').toLowerCase() === name.toLowerCase());
+    if (sameName) {
+      project = await db.updateProject(sameName.id, { repo_path: repoPath });
+      await addAuditEntry('workspace.link', { name: project.name, repo_path: repoPath });
+    } else {
+      project = await db.createProject({ name, repo_path: repoPath });
+      await addAuditEntry('workspace.register', { name, repo_path: repoPath });
+    }
+  }
   rules.invalidateCache();
   notifyMainWindow('projects-changed');
-  await addAuditEntry('workspace.register', { name, repo_path: repoPath });
-  if (_pendingProposal && normalizeRepoPath(_pendingProposal.root) === repoPath) _pendingProposal = null;
+  if (_pendingProposal && repoPathsEqual(_pendingProposal.root, repoPath)) _pendingProposal = null;
   return project;
 });
 
@@ -1581,12 +1660,11 @@ ipcMain.handle('ignore-workspace', async (_, data) => {
   const repoPath = normalizeRepoPath(data?.root || '');
   if (!repoPath) return false;
   const ignored = await getIgnoredWorkspacePaths();
-  const norm = repoPath.toLowerCase();
-  if (!ignored.some(p => p.toLowerCase() === norm)) {
+  if (!ignored.some(p => repoPathsEqual(p, repoPath))) {
     ignored.push(repoPath);
     await db.saveSetting('ignored_workspace_paths', { paths: ignored });
   }
-  if (_pendingProposal && normalizeRepoPath(_pendingProposal.root).toLowerCase() === norm) _pendingProposal = null;
+  if (_pendingProposal && repoPathsEqual(_pendingProposal.root, repoPath)) _pendingProposal = null;
   return true;
 });
 
@@ -2148,7 +2226,10 @@ async function initWorkflow(projectId) {
   const result = workflowContext.scaffoldWorkflow(project.repo_path, project.name, apiPort);
 
   if (result.success) {
-    addAuditEntry('workflow-init', `Dev workflow initialized for ${project.name} at ${project.repo_path}`);
+    const detail = result.repaired
+      ? `Dev workflow repaired for ${project.name} at ${project.repo_path} (${result.repaired.length ? result.repaired.join(', ') : 'nothing missing'})`
+      : `Dev workflow initialized for ${project.name} at ${project.repo_path}`;
+    addAuditEntry('workflow-init', detail);
     notifyMainWindow('projects-changed');
   }
   return result;
@@ -2200,7 +2281,7 @@ ipcMain.on('open-capture', async () => {
 
 // ── IPC Handlers: Setup Wizard ──
 
-const { execSync, exec } = require('child_process');
+const { execSync, exec, spawn } = require('child_process');
 
 ipcMain.handle('setup-check-docker', async () => {
   try {
@@ -2349,72 +2430,133 @@ ipcMain.handle('detect-ide', async (_, repoPath) => {
     result.claudeCodeExtension = dirs.some(d => d.startsWith('anthropic.claude-code'));
   } catch {}
 
-  // Check MCP config
+  // Check MCP config — VS Code native (.vscode/mcp.json) or Claude Code CLI (.mcp.json)
   if (repoPath) {
-    const mcpPath = path.join(repoPath, '.vscode', 'mcp.json');
-    try {
-      const config = JSON.parse(fs.readFileSync(mcpPath, 'utf8'));
-      result.mcpConfigured = !!(config.servers?.huminloop || config.mcpServers?.huminloop);
-    } catch {}
+    for (const mcpPath of [path.join(repoPath, '.vscode', 'mcp.json'), path.join(repoPath, '.mcp.json')]) {
+      try {
+        const config = JSON.parse(fs.readFileSync(mcpPath, 'utf8'));
+        if (config.servers?.huminloop || config.mcpServers?.huminloop) { result.mcpConfigured = true; break; }
+      } catch {}
+    }
   }
 
   return result;
 });
 
+// Server entry shared by both MCP config formats. HUMINLOOP_PROJECT_ROOT is
+// the name the MCP server reads; PROJECT_ROOT is kept for configs generated
+// before the names were reconciled.
+function buildMcpServerEntry(project) {
+  const mcpServerPath = path.join(__dirname, '..', 'mcp-server', 'index.js').replace(/\\/g, '/');
+  const apiPort = process.env.HUMINLOOP_API_PORT || '7277';
+  const repoPath = project.repo_path.replace(/\\/g, '/');
+  return {
+    command: 'node',
+    args: [mcpServerPath],
+    env: {
+      HUMINLOOP_API_PORT: apiPort,
+      HUMINLOOP_PROJECT_ROOT: repoPath,
+      PROJECT_ROOT: repoPath,
+    },
+  };
+}
+
 ipcMain.handle('generate-mcp-config', async (_, projectId) => {
   const project = await db.getProject(projectId);
   if (!project || !project.repo_path) throw new Error('Project has no repo_path');
-
-  const mcpServerPath = path.join(__dirname, '..', 'mcp-server', 'index.js').replace(/\\/g, '/');
-  const apiPort = process.env.HUMINLOOP_API_PORT || '7277';
-
-  return {
-    servers: {
-      huminloop: {
-        command: 'node',
-        args: [mcpServerPath],
-        env: {
-          HUMINLOOP_API_PORT: apiPort,
-          PROJECT_ROOT: project.repo_path.replace(/\\/g, '/'),
-        },
-      },
-    },
-  };
+  return { servers: { huminloop: buildMcpServerEntry(project) } };
 });
 
 ipcMain.handle('write-mcp-config', async (_, projectId) => {
   const project = await db.getProject(projectId);
   if (!project || !project.repo_path) throw new Error('Project has no repo_path');
 
-  const mcpServerPath = path.join(__dirname, '..', 'mcp-server', 'index.js').replace(/\\/g, '/');
-  const apiPort = process.env.HUMINLOOP_API_PORT || '7277';
-  const mcpConfig = {
-    servers: {
-      huminloop: {
-        command: 'node',
-        args: [mcpServerPath],
-        env: {
-          HUMINLOOP_API_PORT: apiPort,
-          PROJECT_ROOT: project.repo_path.replace(/\\/g, '/'),
-        },
-      },
-    },
-  };
+  const serverEntry = buildMcpServerEntry(project);
 
+  // VS Code native format: .vscode/mcp.json with a `servers` key
   const vscodeDir = path.join(project.repo_path, '.vscode');
   if (!fs.existsSync(vscodeDir)) fs.mkdirSync(vscodeDir, { recursive: true });
-
   const mcpPath = path.join(vscodeDir, 'mcp.json');
   let existing = {};
   try { existing = JSON.parse(fs.readFileSync(mcpPath, 'utf8')); } catch {}
-
-  // Merge — don't overwrite other servers
   existing.servers = existing.servers || {};
-  existing.servers.huminloop = mcpConfig.servers.huminloop;
-
+  existing.servers.huminloop = serverEntry;
   fs.writeFileSync(mcpPath, JSON.stringify(existing, null, 2), 'utf8');
-  addAuditEntry('ide-setup', `MCP config written for ${project.name} at ${mcpPath}`);
-  return { success: true, path: mcpPath };
+
+  // Claude Code CLI format: repo-root .mcp.json with an `mcpServers` key
+  const cliMcpPath = path.join(project.repo_path, '.mcp.json');
+  let cliExisting = {};
+  try { cliExisting = JSON.parse(fs.readFileSync(cliMcpPath, 'utf8')); } catch {}
+  cliExisting.mcpServers = cliExisting.mcpServers || {};
+  cliExisting.mcpServers.huminloop = serverEntry;
+  fs.writeFileSync(cliMcpPath, JSON.stringify(cliExisting, null, 2), 'utf8');
+
+  addAuditEntry('ide-setup', `MCP config written for ${project.name} at ${mcpPath} and ${cliMcpPath}`);
+  return { success: true, path: mcpPath, cliPath: cliMcpPath };
+});
+
+// ── IPC Handlers: Connect IDE Window + Workspace Quick Launch ──
+
+ipcMain.handle('list-ide-windows', () => listIDEWindows());
+
+// Verify a user-chosen VS Code window against the project's repo_path.
+// Deliberately does NOT touch active_in_ide — that flag is owned by the MCP
+// heartbeat system; this only answers "does that window look like this repo?".
+ipcMain.handle('connect-ide-window', async (_, projectId, win) => {
+  const project = await db.getProject(projectId);
+  if (!project) return { error: 'Project not found' };
+  const folder = win && win.folder ? String(win.folder) : null;
+  let repoBase = null;
+  let match = 'unknown'; // no repo_path (or no folder in the title) → can't verify
+  if (project.repo_path && folder) {
+    const norm = normalizeRepoPath(project.repo_path).replace(/\\/g, '/').replace(/\/+$/, '');
+    repoBase = norm.split('/').pop() || null;
+    if (repoBase) match = folder.toLowerCase() === repoBase.toLowerCase() ? 'yes' : 'no';
+  }
+  await addAuditEntry('ide.window-connect', { name: project.name, window: (win && win.title) || folder, match });
+  return { match, folder, repoBase, hasRepoPath: !!project.repo_path };
+});
+
+ipcMain.handle('open-project-workspace', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) return { error: 'Project has no repo path' };
+  const repoPath = project.repo_path;
+  return new Promise((resolve) => {
+    let child;
+    let stderr = '';
+    try {
+      if (process.platform === 'win32') {
+        // `code` is code.cmd on Windows — needs a shell; strip quotes to keep the command sane.
+        child = exec(`code "${repoPath.replace(/"/g, '')}"`, { windowsHide: true });
+      } else {
+        child = spawn('code', [repoPath], { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+        child.stderr.on('data', (d) => { stderr += d; });
+      }
+    } catch (e) { return resolve({ error: e.message }); }
+    let settled = false;
+    const succeed = async () => {
+      if (settled) return;
+      settled = true;
+      if (child.unref) child.unref();
+      await addAuditEntry('workspace.launch', { name: project.name, repo_path: repoPath });
+      resolve({ success: true });
+    };
+    child.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      resolve({ error: 'Could not launch VS Code (`code` CLI not found?): ' + e.message });
+    });
+    // `code <path>` forks the editor and exits ~immediately; a non-zero exit
+    // (e.g. VS Code's terminal-only remote-cli shim outside a VS Code terminal)
+    // means nothing actually opened.
+    child.on('exit', (codeNum) => {
+      if (settled) return;
+      if (codeNum === 0) return void succeed();
+      settled = true;
+      resolve({ error: 'VS Code launcher failed: ' + (stderr.trim().split('\n')[0] || `exit code ${codeNum}`) });
+    });
+    setTimeout(succeed, 1500); // still running after 1.5s → assume it's the editor itself
+  });
 });
 
 // ── Auto-launch on login ──

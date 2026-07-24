@@ -1,0 +1,45 @@
+#!/bin/bash
+# --- HuminLoop Dev Workflow: SESSION.md Refresh ---
+# Regenerates the "Current State" and "Recent Commits" sections of
+# .ai-workflow/context/SESSION.md after every commit so the Workflow tab and
+# IDE AI agents always see current git state. Content from "## In Progress"
+# onward is preserved — that part belongs to the human/agent, not this hook.
+
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+SESSION="$PROJECT_ROOT/.ai-workflow/context/SESSION.md"
+[ -f "$SESSION" ] || exit 0
+
+# Skip on detached HEAD (rebases, bisects)
+[ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "HEAD" ] && exit 0
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+LAST_COMMIT=$(git log -1 --oneline 2>/dev/null)
+RECENT=$(git log --oneline -5 2>/dev/null)
+UPDATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Everything from "## In Progress" onward survives the rewrite
+PRESERVED=$(awk '/^## In Progress/{found=1} found{print}' "$SESSION")
+
+{
+    echo "# Session Context"
+    echo
+    echo "> Auto-maintained by the HuminLoop post-commit hook. Sections from \"## In Progress\" onward are preserved across refreshes."
+    echo
+    echo "## Current State"
+    echo
+    echo "- **Branch:** $BRANCH"
+    echo "- **Last commit:** $LAST_COMMIT"
+    echo "- **Updated:** $UPDATED"
+    echo
+    echo "## Recent Commits"
+    echo
+    echo '```'
+    echo "$RECENT"
+    echo '```'
+    if [ -n "$PRESERVED" ]; then
+        echo
+        echo "$PRESERVED"
+    fi
+} > "$SESSION"
+
+exit 0

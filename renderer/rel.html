@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+<title>HuminLoop — Rel</title>
+<link rel="stylesheet" href="rel.css">
+</head><body>
+<div class="rel-window">
+  <div class="rel-header drag">
+    <div class="rel-id">
+      <span class="rel-avatar">&#x1F43A;</span>
+      <div class="rel-names">
+        <span class="rel-title">RelliK Wolf-Krow</span>
+        <span class="rel-sub">call him &ldquo;Rel&rdquo;</span>
+      </div>
+    </div>
+    <div class="rel-header-right nd">
+      <select id="projectSelect" class="rel-project" title="Active project"></select>
+      <button class="rel-x" onclick="window.quickclip.closeRel()" title="Close">&#x2715;</button>
+    </div>
+  </div>
+
+  <div id="messages" class="rel-messages"></div>
+
+  <div id="statusBar" class="rel-status" style="display:none">
+    <span class="rel-status-dot"></span>
+    <span id="statusText">Rel is thinking&hellip;</span>
+    <span id="toolTicker" class="rel-tools"></span>
+  </div>
+
+  <div class="rel-input-row nd">
+    <textarea id="input" class="rel-input" rows="2" placeholder="Ask Rel anything about this project&hellip;"></textarea>
+    <div class="rel-input-btns">
+      <button id="stopBtn" class="rel-btn stop" onclick="stopTurn()" style="display:none" title="Stop">&#x23F9;</button>
+      <button id="sendBtn" class="rel-btn primary" onclick="sendMessage()" title="Send">&#x27A4;</button>
+    </div>
+  </div>
+</div>
+<script src="rel.js"></script>
+</body></html>

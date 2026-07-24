@@ -1,25 +1,24 @@
 # Session Context
 
-> Auto-maintained by prepare-commit-msg hook. Do not edit manually.
+> Auto-maintained by the HuminLoop post-commit hook. Sections from "## In Progress" onward are preserved across refreshes.
 
 ## Current State
 
 - **Branch:** master
-- **Last commit:** 0b3be81 feat: add AI dev workflow engine and instruction templates
-- **Status:** Bootstrapping AI dev workflow for Windows
+- **Last commit:** b067215 chore(release): v2.1.0 — demos + project tag filter
+- **Updated:** 2026-07-23T21:33:24Z
 
 ## Recent Commits
 
 ```
-0b3be81 feat: add AI dev workflow engine and instruction templates
-f6fd9bd docs: add architecture diagram (current state + goal state)
-3afa5bf feat: auto-detect container environment for host networking
-2826ea8 fix: support HUMINLOOP_API_HOST for devcontainer→host networking
-c6ff03f feat: add local HTTP API and MCP server for AI IDE integration
+b067215 chore(release): v2.1.0 — demos + project tag filter
+5438665 feat(demos): per-project screen recordings with AI narration
+2c91793 feat(viewer): project tag filter (Any/All + saved tag groups) + build task
+9f07760 fix(capture): open popup on the active monitor and raise it above other windows
+522f1c5 fix(scripts): make `npm run kill` work on Windows
 ```
 
 ## In Progress
 
-- Bootstrapping `.ai-workflow/` for HuminLoop on Windows
-- Compiled agent instructions (SHARED, ARCHITECT, BUILDER, REVIEWER, SCREENER)
-- Converting workflow scripts from Linux/tmux to Windows/Git Bash
+- Workflow sync repaired (2026-07-23): project repo_path relinked, PROMPT_TRACKER.log + git hooks installed, MCP `project_link` tool added, match-miss retry fixed
+- Next: restart HuminLoop app and reconnect the IDE's MCP server so both load the new sync code

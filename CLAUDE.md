@@ -129,6 +129,17 @@ Floating annotation toolbar + fullscreen transparent overlay for drawing on scre
 3. IDE agent calls MCP `get_pending_prompt` tool → reads prompt + image → files are deleted (one-shot delivery)
 4. Agent receives prompt text + screenshot as MCP content blocks and can act on it immediately
 
+### Rel — In-App AI Assistant
+
+"RelliK Wolf-Krow" (Rel) is HuminLoop's built-in AI chat assistant, powered by the **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`) embedded in the main process. Phase 1 (chat shell) is live; upcoming phases: repo/workflow audit on connect, manifest-driven Workflow tab, per-asset "Ask Rel" buttons.
+
+- **Auth:** the user's Claude subscription login (`claude login` OAuth from `~/.claude/.credentials.json`) — no API key. Usage bills against subscription limits.
+- **`rel` module (`src/rel.js`):** wraps the SDK's `query()`. The SDK is ESM-only → lazy `import()` from CJS. Per-turn options: `cwd` = project repo_path, `executable: 'node'`, env stripped of `ELECTRON_RUN_AS_NODE`, `permissionMode: 'acceptEdits'` (edits apply automatically — user preference), tools Read/Glob/Grep/Edit/Write/WebSearch/WebFetch + `mcp__huminloop` (Bash off unless `rel.allowBash`). The huminloop MCP server is attached as a stdio server per turn, so Rel natively sees clips/projects/demos/workflow.
+- **Models:** settings key `rel` — `chatModel` (default `claude-sonnet-5`), `auditModel` (default `claude-opus-4-8`, for the phase-2 audit; bump to `claude-fable-5` if desired).
+- **Sessions:** per-project SDK session ids persisted in settings key `rel_sessions` → conversations resume across app restarts; a stale id is dropped and the turn retried fresh.
+- **Window (`renderer/rel.*`):** frameless always-on-top chat window centered over the viewer, built via `src/window-factory.js` (`createAppWindow` — the shared webPreferences helper new windows must use instead of copying boilerplate). IPC: `open-rel`/`close-rel` (send), `get-rel-context`/`rel-send` (invoke), `rel-interrupt` (send), `rel-event` (main→window stream: status / text-delta / tool / assistant / result).
+- **Entry points:** 🐺 header button in the viewer, tray "Ask Rel", and the "Meet Rel" button on the Connect IDE wizard's Connected step.
+
 ### Project Demos
 
 Per-project screen recordings with AI narration cleanup. Full design in [docs/DEMOS.md](docs/DEMOS.md).
@@ -194,12 +205,12 @@ REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatic
 
 Separate Node.js process (stdio transport) that bridges AI IDE agents to HuminLoop via the HTTP API. Has its own `package.json` with `@modelcontextprotocol/sdk` dependency.
 
-**Tools (22 total):**
+**Tools (23 total):**
 - **Knowledge:** `clip_list`, `clip_get`, `clip_create`, `clip_update`, `clip_delete`, `clip_complete`, `clip_search`, `clip_summarize`, `clip_combine_prompt`, `project_list`, `project_get`, `project_create`, `category_list`, `demo_list`, `demo_get`, `huminloop_health` — proxy to HTTP API
 - **Workflow:** `session_context`, `session_read`, `git_status` — run locally via `child_process`
-- **IDE Bridge:** `project_match` (auto-match workspace to HuminLoop project + return workflow context), `get_pending_prompt` (read staged IDE_PROMPT.md + image, one-shot delivery), `clip_get_prompt` (fetch clip prompt + optional image on-demand)
+- **IDE Bridge:** `project_match` (auto-match workspace to HuminLoop project + return workflow context), `project_link` (link workspace to an existing project by setting its repo_path — self-heal when match fails), `get_pending_prompt` (read staged IDE_PROMPT.md + image, one-shot delivery), `clip_get_prompt` (fetch clip prompt + optional image on-demand)
 
-**Project matching:** `matchProject()` compares `PROJECT_ROOT` against project `repo_path` fields (normalized path comparison, cached for session lifetime).
+**Project matching:** `matchProject()` compares `PROJECT_ROOT` against project `repo_path` fields (normalized path comparison). A successful match is cached for the session; a miss is retried after 30s so mid-session linking (via `project_link` or the app) takes effect without an IDE restart. On a miss the server also POSTs `/api/workspace/propose` so the viewer offers to register/link the workspace.
 
 **Container-aware:** auto-detects devcontainers/Codespaces and uses `host.docker.internal` to reach the Electron app on the host.
 
@@ -258,6 +269,17 @@ The main window has a Workflow tab that surfaces the AI dev workflow state direc
 
 Data flows through IPC (`get-workflow-status`, `get-workflow-changelog`, `get-workflow-prompts`) and is also exposed via the HTTP API (`/api/workflow/*`).
 
+### Connect IDE Wizard & Workspaces Quick Launch
+
+When a project isn't IN IDE, the project Workflow header shows "🔌 Connect IDE…" which opens a wizard (`openIdeConnect` in `renderer/index.js`):
+
+1. **Pick a window** — `wininfo.listIDEWindows()` enumerates open VS Code windows: Win32 EnumWindows via auto-generated `scripts/list-windows.ps1`, **WSL→Windows-host `powershell.exe` interop** (host VS Code windows are invisible to xdotool), and xdotool for Linux-native windows. Titles are parsed by `parseVSCodeWindowTitle()` (folder + `[WSL: …]` remote badge).
+2. **Verify** — IPC `connect-ide-window` compares the window's folder to the repo_path basename (via `normalizeRepoPath`); mismatch → friendly "this may not be the correct project/path" warning with connect-anyway.
+3. **Check IDE + MCP** — reuses `detect-ide` (VS Code CLI / Claude Code extension / mcp.json) and the existing `showMcpSetup()` panel, then polls until the MCP heartbeat flips `active_in_ide`. **The wizard never sets `active_in_ide` itself** — the api-server heartbeat system owns that flag.
+4. **Suggest a workspace pin** on success.
+
+**Workspaces quick launch:** sidebar section (below Trash in both the General Notes and Projects sidebars) listing pinned projects; click runs IPC `open-project-workspace` → `code <repo_path>` (exit-code-checked; VS Code's terminal-only remote-cli shim failing is reported, not swallowed). Pins live in settings key `workspace_quick_launch` (array of project ids), toggled via the ★ Workspace header button or the wizard.
+
 ### Audit Ledger
 
 In-memory array (max 200 entries) persisted to DB settings key `audit_log`. Tracks clip create/update/delete/AI actions. Use `addAuditEntry(action, detail)` in main.js when adding new operations.
@@ -308,7 +330,12 @@ Generic templates and Linux-native scripts (from `wyofalcon/ai-dev-workflow`). N
 
 ### Git Hooks
 
-- **`prepare-commit-msg`** — auto-appends builder summary to commit messages (reads `builder-output.log`). Installed at `.git/hooks/`, source at `workflow/hooks/`.
+Installed into `.git/hooks/` by `scaffoldWorkflow`/`repairWorkflow` (source templates in `workflow-templates/hooks/`, idempotent via marker comment):
+
+- **`prepare-commit-msg`** — marks tracked prompts DONE via `PATCH /api/workflow/prompts/:id` when the commit message contains `# Prompt ID: xxx`.
+- **`post-commit`** — regenerates the "Current State" and "Recent Commits" sections of `SESSION.md` after every commit; content from `## In Progress` onward is preserved.
+
+(`workflow/hooks/prepare-commit-msg` is the older Linux/tmux variant that appends builder summaries from `builder-output.log` — not installed by the app.)
 
 ### Windows Notes
 
@@ -345,6 +372,7 @@ Use these labels when discussing parts of the system. They are the canonical sho
 | `rules` | Categorization engine | `src/rules.js` |
 | `wininfo` | Window metadata capture | `src/window-info.js` |
 | `images` | Disk image storage | `src/images.js` |
+| `repo-path` | repo_path normalization + comparison | `src/repo-path.js` |
 | `media` | Disk demo video/audio storage + streaming writers + PCM→WAV | `src/media.js` |
 | `wf-context` | Workflow context reader | `src/workflow-context.js` |
 

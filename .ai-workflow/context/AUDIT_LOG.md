@@ -1,5 +1,14 @@
 # Pre-Feature Audit Log
 
+## 2026-07-24 — Rel AI Assistant (chat window + Agent SDK) + MCP Server Fixes
+
+- IPC handlers (`send-to-ide`, `combine-and-send-to-ide`, `summarize-project`, `combine-clips-prompt`) duplicate HTTP API endpoint logic line-for-line (main.js:1648-1769 vs api-server.js:246/542/573/590) — not consolidated this round (out of scope), flagged for a future shared module (`src/send-to-ide.js`, `src/ai-prompts.js`)
+- Path normalization was split between `src/repo-path.js` and mcp-server's own `normalizePath()` with subtle drift (quote stripping) — synced as part of the MCP fixes; both sides now carry keep-in-sync comments
+- Window-creation boilerplate (identical webPreferences + preload path) repeated 6× across setupWindow/mainWindow/captureWindow/toolbarWindow/overlayWindow/recorderWindow — addressed by adding `src/window-factory.js` (`createAppWindow`), used by the new Rel window; migrating the existing 6 windows is a follow-up
+- `lite_active_project` setting is dead (migration-cleanup read only) — candidate for removal
+- Workflow scripts duplicated in `workflow/scripts/` (Linux) vs `.ai-workflow/scripts/` (Windows) — intentional but maintenance-heavy; consider a sync check
+- Recommendation (applied): new Rel window built on the window factory instead of a 7th boilerplate copy; MCP `normalizePath` synced with `repo-path.js`; remaining consolidation items deferred with pointers above
+
 ## 2026-07-21 — Tag Filter AND/OR Mode + Tag Groups
 
 - Settings persistence is a JSON key/value store end-to-end: `saveSetting(key, value)` JSON-stringifies any value and `getSettings()` parses it back (db-sqlite.js:504-522, db-pg.js:470-489). Arbitrary keys work with **zero schema migration** — mirrors existing `prompt_blocks`, `audit_log`, `ignored_workspace_paths` keys. Store tag groups as `saveSetting('tag_groups', { [projectId]: [{id,name,tags}] })`.
@@ -304,3 +313,21 @@ No blocking issues. Feature can reuse existing project creation, settings storag
 - **Inconsistent JSON-row parsing between backends is intentional:** pg's driver parses JSONB natively; sqlite needs `parseDemoRow`. sqlite's `parseDemoRow` now also normalizes `datetime('now')` timestamps to ISO-8601 UTC (raw strings parsed as local time in Chromium — "just now" bug).
 - **Review fixes landed alongside the feature:** fs stream `'error'` handlers in media.js writers + `stream.pipeline` in api-server streaming (crash + fd-leak class), read paths no longer `mkdir` (auth-less API could create unlimited dirs), permission handler scoped to media/display-capture instead of allow-all, `demo-cancel` guarded to in-flight recordings, suffix Range requests handled per RFC, audio/poster routes check demo existence, playing video survives re-renders.
 - Recommendation: hands-on test the recorder/VAD/self-dub path on a real screen + mic (still not exercised headlessly); consider `uiohook-napi` for true click markers and `kokoro-js` as an offline TTS fallback for the dub slot.
+
+## 2026-07-23 — Workflow Sync Repair (IDE ↔ HuminLoop)
+
+- Path normalization existed in ~5 near-identical copies: `normalizePath()` (mcp-server/index.js), `normalizeRepoPath()` duplicated verbatim in src/main.js and src/api-server.js, an incomplete inline `norm` lambda in `proposeWorkspace()` (missing WSL/.code-workspace handling), and redundant `.toLowerCase()` chains around proposal/ignore comparisons. Consolidated into `src/repo-path.js` (`normalizeRepoPath`/`canonicalRepoPath`/`repoPathsEqual`); mcp-server keeps its own copy intentionally (standalone package, separate process) with a sync note.
+- Prompt-tracker line parsing was duplicated inside src/workflow-context.js (`getPendingPrompts` vs `readAllPrompts`) — extracted shared `parseTrackerLine`/`readTrackerLines` helpers.
+- rules.js:125 partial path handling is NOT a duplicate — it extracts a repo folder name for window-title substring matching, different purpose; left as is.
+- Audit's claim that `normalizeRepoPath()` already lowercases was wrong (it never did) — case-insensitive comparison now lives explicitly in `canonicalRepoPath()`, and the stored form keeps original case (matters on Linux).
+- Root causes of the broken sync found during audit: HuminLoop project row had `repo_path: null` (lost in sqlite→pg switch), no git hooks installed (`.git/hooks/` empty → SESSION.md 40 commits stale), no PROMPT_TRACKER.log, MCP `matchProject()` cached a failed match for the whole session, and `register-workspace` would have created a duplicate project instead of linking the existing one.
+- Recommendation (applied): `repairWorkflow()` heals partial `.ai-workflow/` dirs (scaffold now repairs instead of failing with `already_exists`); new `post-commit` hook actually maintains SESSION.md; MCP retries a missed match after 30s and gained a `project_link` tool for self-healing from the IDE side.
+
+## 2026-07-23 — Connect IDE Window + Workspaces Quick Launch
+
+- Path normalization/comparison must go through `src/repo-path.js` (`repoPathsEqual`/`canonicalRepoPath`) — never raw string compare; mcp-server keeps its intentional standalone copy.
+- `active_in_ide` is owned by the api-server heartbeat system (set by MCP heartbeats, cleared by expiry sweep + startup sweep) — the new connect flow must NOT manually toggle it; it verifies the chosen VS Code window and guides MCP setup, then waits for the real heartbeat.
+- `window-info.js` only reads the *active* window — VS Code window enumeration belongs there (extend, don't create a parallel module). New async `listIDEWindows()` added alongside `getActiveWindow*()`.
+- Existing focused-mode IDE plumbing (`detect-ide`, `generate-mcp-config`, `write-mcp-config`, `showMcpSetup()`) is reusable as-is for the full-mode connect wizard — no duplication needed.
+- Workspace proposals: reuse `proposeWorkspace()`/`register-workspace` patterns rather than new registration paths; quick-launch pins are plain settings (`workspace_quick_launch`), no schema change.
+- No dead code found in touched areas; `sanitizeUpdates` twin-allowlist pattern is intentional.

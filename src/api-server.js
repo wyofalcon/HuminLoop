@@ -15,17 +15,7 @@ const stream = require('stream');
 const { URL } = require('url');
 const workflowContext = require('./workflow-context');
 
-// Normalize repo_path: strip quotes from "Copy as Path", strip .code-workspace
-// filename, and canonicalize WSL UNC paths (\\wsl.localhost\<distro>\... or
-// \\wsl$\<distro>\...) to their underlying Linux path.
-function normalizeRepoPath(p) {
-  if (!p) return p;
-  p = p.replace(/^["']|["']$/g, '').trim();
-  p = p.replace(/[\\/][^\\/]+\.code-workspace$/i, '');
-  const wslMatch = p.replace(/\\/g, '/').match(/^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+(\/.*)?$/i);
-  if (wslMatch) p = wslMatch[1] || '/';
-  return p;
-}
+const { normalizeRepoPath } = require('./repo-path');
 
 const PORT = parseInt(process.env.HUMINLOOP_API_PORT || '7277', 10);
 
@@ -584,8 +574,10 @@ function startApiServer(deps) {
         const { clipIds } = await parseBody(req);
         if (!Array.isArray(clipIds) || clipIds.length === 0) return error(res, 'clipIds array required');
 
+        // Clip IDs are TEXT — coerce so numeric IDs from external callers still match.
+        const wanted = new Set(clipIds.map(String));
         const allClips = await db.getClips();
-        const selected = allClips.filter(c => clipIds.includes(c.id));
+        const selected = allClips.filter(c => wanted.has(String(c.id)));
         if (selected.length === 0) return error(res, 'No matching clips found');
 
         const notes = selected.map(c => {
@@ -604,8 +596,9 @@ function startApiServer(deps) {
         const project = await db.getProject(parseInt(project_id, 10));
         if (!project || !project.repo_path) return error(res, 'Project has no repo_path');
 
+        const wanted = new Set(clipIds.map(String));
         const allClips = await db.getClips();
-        const selected = allClips.filter(c => clipIds.includes(c.id));
+        const selected = allClips.filter(c => wanted.has(String(c.id)));
         if (selected.length === 0) return error(res, 'No matching clips found');
 
         const notes = selected.map(c => {

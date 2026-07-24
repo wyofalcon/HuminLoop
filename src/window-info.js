@@ -123,6 +123,159 @@ function getActiveWindowLinux() {
   return NULLS;
 }
 
+// ── IDE window enumeration ──
+// Lists every open VS Code window so the viewer can offer "connect this
+// project to that window". Inside WSL the interesting VS Code windows are
+// usually Windows-host processes (invisible to xdotool), so WSL enumerates
+// through powershell.exe interop in addition to xdotool.
+
+const LIST_SCRIPT_PATH = path.join(__dirname, '..', 'scripts', 'list-windows.ps1');
+
+function ensureListScript() {
+  const dir = path.dirname(LIST_SCRIPT_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(LIST_SCRIPT_PATH)) {
+    fs.writeFileSync(LIST_SCRIPT_PATH, `
+Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public class WinEnum {
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int c);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  public static List<string> Run() {
+    var rows = new List<string>();
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      if (!IsWindowVisible(h)) return true;
+      var sb = new StringBuilder(512);
+      GetWindowText(h, sb, 512);
+      if (sb.Length == 0) return true;
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      rows.Add(pid.ToString() + "|" + sb.ToString());
+      return true;
+    }, IntPtr.Zero);
+    return rows;
+  }
+}
+"@ -ErrorAction SilentlyContinue
+$names = @{}
+Get-Process | ForEach-Object { $names[$_.Id] = $_.ProcessName }
+[WinEnum]::Run() | ForEach-Object {
+  $parts = $_.Split('|', 2)
+  $pn = $names[[int]$parts[0]]
+  "$($parts[0])|$pn|$($parts[1])"
+}
+`, 'utf8');
+  }
+}
+
+let _isWSL = null;
+function isWSL() {
+  if (_isWSL !== null) return _isWSL;
+  try {
+    _isWSL = process.platform === 'linux' && /microsoft/i.test(fs.readFileSync('/proc/version', 'utf8'));
+  } catch { _isWSL = false; }
+  return _isWSL;
+}
+
+/**
+ * Parse a VS Code window title into its workspace folder.
+ * "● index.js - HuminLoop [WSL: Ubuntu] - Visual Studio Code" →
+ * { folder: 'HuminLoop', remote: 'WSL: Ubuntu' }. Returns null for
+ * non-VS-Code titles.
+ */
+function parseVSCodeWindowTitle(title) {
+  if (!title) return null;
+  const t = String(title).trim().replace(/\s*\[Administrator\]$/i, '');
+  const m = t.match(/^(.+)\s-\s(?:Visual Studio Code(?: - Insiders)?|VSCodium)$/);
+  if (!m) return null;
+  const parts = m[1].split(' - ');
+  let folder = parts[parts.length - 1].trim().replace(/^●\s*/, '');
+  let remote = null;
+  const rm = folder.match(/^(.*?)\s*\[([^\]]+)\]$/);
+  if (rm) { folder = rm[1].trim(); remote = rm[2].trim(); }
+  folder = folder.replace(/\s*\(Workspace\)$/i, '');
+  if (!folder) return null;
+  return { folder, remote };
+}
+
+// Rows come back as "pid|processName|title"; titles may contain '|'.
+function parseWindowsEnumOutput(out) {
+  const wins = [];
+  for (const line of String(out).split('\n')) {
+    const row = line.trim();
+    const a = row.indexOf('|');
+    const b = row.indexOf('|', a + 1);
+    if (a < 0 || b < 0) continue;
+    const processName = row.slice(a + 1, b);
+    const title = row.slice(b + 1);
+    const parsed = parseVSCodeWindowTitle(title);
+    if (parsed) wins.push({ title, processName: processName || null, ...parsed });
+  }
+  return wins;
+}
+
+function listWindowsHostWindows(shell) {
+  return new Promise((resolve) => {
+    try {
+      ensureListScript();
+      let scriptPath = LIST_SCRIPT_PATH;
+      if (shell === 'powershell.exe') {
+        // Host PowerShell needs the Windows (UNC) form of a WSL path.
+        scriptPath = execFileSync('wslpath', ['-w', LIST_SCRIPT_PATH], { encoding: 'utf8', timeout: 3000 }).trim();
+      }
+      execFile(shell, [
+        '-NoProfile', '-NoLogo', '-ExecutionPolicy', 'Bypass',
+        '-File', scriptPath,
+      ], { encoding: 'utf8', timeout: 10000, windowsHide: true }, (err, out) => {
+        if (err) return resolve([]);
+        resolve(parseWindowsEnumOutput(out));
+      });
+    } catch { resolve([]); }
+  });
+}
+
+function listXdotoolWindows() {
+  return new Promise((resolve) => {
+    if (detectLinuxMethod() !== 'xdotool') return resolve([]);
+    exec('xdotool search --onlyvisible --name "Visual Studio Code" getwindowname %@', { encoding: 'utf8', timeout: 3000 }, (err, out) => {
+      if (err) return resolve([]); // non-zero exit also means "no matches"
+      const wins = [];
+      for (const line of String(out).split('\n')) {
+        const title = line.trim();
+        const parsed = title && parseVSCodeWindowTitle(title);
+        if (parsed) wins.push({ title, processName: null, ...parsed });
+      }
+      resolve(wins);
+    });
+  });
+}
+
+/**
+ * List open VS Code windows across every reachable display server.
+ * Never rejects. @returns {Promise<Array<{title, folder, remote, processName}>>}
+ */
+async function listIDEWindows() {
+  const jobs = [];
+  if (process.platform === 'win32') jobs.push(listWindowsHostWindows('powershell'));
+  if (process.platform === 'linux') {
+    jobs.push(listXdotoolWindows());
+    if (isWSL()) jobs.push(listWindowsHostWindows('powershell.exe'));
+  }
+  const results = await Promise.all(jobs);
+  const seen = new Set();
+  return results.flat().filter((w) => {
+    if (seen.has(w.title)) return false;
+    seen.add(w.title);
+    return true;
+  });
+}
+
 // ── Public API ──
 
 /**
@@ -180,4 +333,4 @@ function getActiveWindowAsync() {
   });
 }
 
-module.exports = { getActiveWindow, getActiveWindowAsync };
+module.exports = { getActiveWindow, getActiveWindowAsync, listIDEWindows, parseVSCodeWindowTitle };

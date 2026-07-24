@@ -69,24 +69,32 @@ function getGitState(repoPath) {
 }
 
 /**
+ * Parse one PROMPT_TRACKER.log line: id|status|timestamp|description|type|parentId|files
+ */
+function parseTrackerLine(line) {
+  const parts = line.split('|');
+  return {
+    id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3],
+    type: parts[4] || 'CRAFTED', parentId: parts[5] || null,
+    files: parts[6] ? parts[6].split(',').filter(Boolean) : [],
+  };
+}
+
+function readTrackerLines(repoPath) {
+  const filePath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  const raw = fs.readFileSync(filePath, 'utf8').trim();
+  return raw ? raw.split('\n').map(parseTrackerLine) : [];
+}
+
+/**
  * Read pending prompts from PROMPT_TRACKER.log.
  * Returns array of prompt objects with status !== DONE or FAILED.
  * @param {string} repoPath — absolute path to the project repository
  */
 function getPendingPrompts(repoPath) {
   if (!repoPath) return [];
-  const filePath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
   try {
-    const raw = fs.readFileSync(filePath, 'utf8').trim();
-    if (!raw) return [];
-    return raw.split('\n').map(line => {
-      const parts = line.split('|');
-      return {
-        id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3],
-        type: parts[4] || 'CRAFTED', parentId: parts[5] || null,
-        files: parts[6] ? parts[6].split(',').filter(Boolean) : [],
-      };
-    }).filter(p => p.status !== 'DONE' && p.status !== 'FAILED');
+    return readTrackerLines(repoPath).filter(p => p.status !== 'DONE' && p.status !== 'FAILED');
   } catch {
     return [];
   }
@@ -142,18 +150,8 @@ function readChangelog(repoPath) {
 
 function readAllPrompts(repoPath) {
   if (!repoPath) return [];
-  const filePath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
   try {
-    const raw = fs.readFileSync(filePath, 'utf8').trim();
-    if (!raw) return [];
-    return raw.split('\n').map(line => {
-      const parts = line.split('|');
-      return {
-        id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3],
-        type: parts[4] || 'CRAFTED', parentId: parts[5] || null,
-        files: parts[6] ? parts[6].split(',').filter(Boolean) : [],
-      };
-    }).reverse();
+    return readTrackerLines(repoPath).reverse();
   } catch {
     return [];
   }
@@ -220,42 +218,75 @@ function getTemplateDir() {
   return devPath;
 }
 
+// Git hooks installed into project repos. prepare-commit-msg marks tracked
+// prompts DONE on commit; post-commit refreshes SESSION.md so the IDE AI and
+// the Workflow tab always see current git state.
+const HOOK_NAMES = ['prepare-commit-msg', 'post-commit'];
+
 /**
- * Install the prepare-commit-msg git hook into a project repo.
- * Appends to existing hook if present, otherwise creates a new one.
+ * Install one HuminLoop git hook into a project repo.
+ * Appends to an existing hook if present, otherwise creates a new one.
+ * Idempotent via marker comment.
  * @param {string} repoPath — absolute path to the project repository
  * @param {string} templateDir — path to the workflow-templates directory
+ * @param {string} hookName — hook filename (e.g. 'prepare-commit-msg')
+ * @returns {boolean} true if the hook was installed or appended
  */
-function installGitHook(repoPath, templateDir) {
+function installGitHook(repoPath, templateDir, hookName = 'prepare-commit-msg') {
   const hooksDir = path.join(repoPath, '.git', 'hooks');
-  if (!fs.existsSync(hooksDir)) return;
+  if (!fs.existsSync(hooksDir)) return false;
 
-  const hookPath = path.join(hooksDir, 'prepare-commit-msg');
-  const templateHook = path.join(templateDir, 'hooks', 'prepare-commit-msg');
-  if (!fs.existsSync(templateHook)) return;
+  const hookPath = path.join(hooksDir, hookName);
+  const templateHook = path.join(templateDir, 'hooks', hookName);
+  if (!fs.existsSync(templateHook)) return false;
 
   const hookContent = fs.readFileSync(templateHook, 'utf8');
   const marker = '# --- HuminLoop Dev Workflow ---';
 
   if (fs.existsSync(hookPath)) {
     const existing = fs.readFileSync(hookPath, 'utf8');
-    if (existing.includes(marker)) return;
+    if (existing.includes(marker)) return false;
     fs.appendFileSync(hookPath, `\n\n${marker}\n${hookContent}\n`, 'utf8');
   } else {
     fs.writeFileSync(hookPath, `#!/bin/bash\n\n${marker}\n${hookContent}\n`, 'utf8');
   }
 
   try { fs.chmodSync(hookPath, '755'); } catch {}
+  return true;
+}
+
+function installGitHooks(repoPath, templateDir) {
+  return HOOK_NAMES.filter(h => installGitHook(repoPath, templateDir, h));
+}
+
+const WORKFLOW_DIRS = ['instructions', 'context', 'scripts', 'config'];
+
+function contextFileDefaults(repoPath, projectName) {
+  const now = new Date().toISOString();
+  let branch = 'main';
+  try {
+    branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath, encoding: 'utf8' }).trim();
+  } catch {}
+  return {
+    'SESSION.md': `# Session Context\n\n- Branch: ${branch}\n- Initialized: ${now}\n- Project: ${projectName}\n`,
+    'PROMPT_TRACKER.log': '',
+    'RELAY_MODE': 'review',
+    'AUDIT_WATCH_MODE': 'off',
+    'CHANGELOG.md': `# Changelog\n\nInitialized ${now}\n`,
+    'AUDIT_LOG.md': `# Audit Log\n`,
+  };
 }
 
 /**
  * Scaffold a full .ai-workflow directory for a project from bundled templates.
  * Creates directory structure, copies/substitutes templates, initializes context files,
- * writes API port config, and installs the git hook.
+ * writes API port config, and installs the git hooks.
+ * If .ai-workflow already exists, repairs it instead (fills in anything missing
+ * without touching existing files).
  * @param {string} repoPath — absolute path to the project repository
  * @param {string} projectName — display name of the project
  * @param {number} apiPort — HuminLoop API port (default 7277)
- * @returns {{ success: boolean, reason?: string }}
+ * @returns {{ success: boolean, reason?: string, repaired?: string[] }}
  */
 function scaffoldWorkflow(repoPath, projectName, apiPort = 7277) {
   if (!repoPath) return { success: false, reason: 'no_repo_path' };
@@ -267,14 +298,12 @@ function scaffoldWorkflow(repoPath, projectName, apiPort = 7277) {
   }
   const workflowDir = path.join(repoPath, '.ai-workflow');
   if (fs.existsSync(workflowDir)) {
-    return { success: false, reason: 'already_exists' };
+    return repairWorkflow(repoPath, projectName, apiPort);
   }
 
   const templateDir = getTemplateDir();
 
-  // Create directory structure
-  const dirs = ['instructions', 'context', 'scripts', 'config'];
-  dirs.forEach(d => fs.mkdirSync(path.join(workflowDir, d), { recursive: true }));
+  WORKFLOW_DIRS.forEach(d => fs.mkdirSync(path.join(workflowDir, d), { recursive: true }));
 
   // Copy and substitute instruction templates
   const instructionFiles = ['SHARED.md', 'ARCHITECT.md', 'BUILDER.md', 'REVIEWER.md', 'SCREENER.md'];
@@ -297,33 +326,66 @@ function scaffoldWorkflow(repoPath, projectName, apiPort = 7277) {
   }
 
   // Initialize context files
-  const now = new Date().toISOString();
-  let branch = 'main';
-  try {
-    branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: repoPath, encoding: 'utf8' }).trim();
-  } catch {}
-
-  fs.writeFileSync(path.join(workflowDir, 'context', 'SESSION.md'),
-    `# Session Context\n\n- Branch: ${branch}\n- Initialized: ${now}\n- Project: ${projectName}\n`, 'utf8');
-  fs.writeFileSync(path.join(workflowDir, 'context', 'PROMPT_TRACKER.log'), '', 'utf8');
-  fs.writeFileSync(path.join(workflowDir, 'context', 'RELAY_MODE'), 'review', 'utf8');
-  fs.writeFileSync(path.join(workflowDir, 'context', 'AUDIT_WATCH_MODE'), 'off', 'utf8');
-  fs.writeFileSync(path.join(workflowDir, 'context', 'CHANGELOG.md'), `# Changelog\n\nInitialized ${now}\n`, 'utf8');
-  fs.writeFileSync(path.join(workflowDir, 'context', 'AUDIT_LOG.md'), `# Audit Log\n`, 'utf8');
+  const defaults = contextFileDefaults(repoPath, projectName);
+  for (const [f, content] of Object.entries(defaults)) {
+    fs.writeFileSync(path.join(workflowDir, 'context', f), content, 'utf8');
+  }
 
   // Write API port config
   fs.writeFileSync(path.join(workflowDir, 'config', 'api-port'), String(apiPort), 'utf8');
 
-  // Install git hook
-  installGitHook(repoPath, templateDir);
+  installGitHooks(repoPath, templateDir);
 
   return { success: true };
+}
+
+/**
+ * Repair an existing .ai-workflow directory: create any missing subdirectories
+ * and context files, write config/api-port if absent, and install any missing
+ * git hooks. Never overwrites existing files. Heals hand-bootstrapped or
+ * partially-migrated workflow dirs (e.g. missing PROMPT_TRACKER.log or hooks).
+ * @returns {{ success: boolean, reason?: string, repaired: string[] }}
+ */
+function repairWorkflow(repoPath, projectName, apiPort = 7277) {
+  if (!repoPath) return { success: false, reason: 'no_repo_path', repaired: [] };
+  const workflowDir = path.join(repoPath, '.ai-workflow');
+  if (!fs.existsSync(workflowDir)) return { success: false, reason: 'not_initialized', repaired: [] };
+
+  const repaired = [];
+  const templateDir = getTemplateDir();
+
+  WORKFLOW_DIRS.forEach(d => {
+    const p = path.join(workflowDir, d);
+    if (!fs.existsSync(p)) {
+      fs.mkdirSync(p, { recursive: true });
+      repaired.push(`created ${d}/`);
+    }
+  });
+
+  const defaults = contextFileDefaults(repoPath, projectName);
+  for (const [f, content] of Object.entries(defaults)) {
+    const p = path.join(workflowDir, 'context', f);
+    if (!fs.existsSync(p)) {
+      fs.writeFileSync(p, content, 'utf8');
+      repaired.push(`created context/${f}`);
+    }
+  }
+
+  const portFile = path.join(workflowDir, 'config', 'api-port');
+  if (!fs.existsSync(portFile)) {
+    fs.writeFileSync(portFile, String(apiPort), 'utf8');
+    repaired.push('created config/api-port');
+  }
+
+  installGitHooks(repoPath, templateDir).forEach(h => repaired.push(`installed ${h} hook`));
+
+  return { success: true, repaired };
 }
 
 module.exports = {
   readSessionContext, readAuditFindings, hasWorkflow,
   getGitState, getPendingPrompts, readRelayMode, assembleBundle,
-  scaffoldWorkflow,
+  scaffoldWorkflow, repairWorkflow,
   readAuditMode, setRelayMode, setAuditMode,
   readChangelog, readAllPrompts, updatePromptTracker,
 };

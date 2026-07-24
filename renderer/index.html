@@ -4,6 +4,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: http://127.0.0.1:* http://localhost:*; media-src 'self' blob: http://127.0.0.1:* http://localhost:*;">
 <title>HuminLoop</title>
 <link rel="stylesheet" href="index.css">
+<link rel="stylesheet" href="rel-dock.css">
 </head><body>
 
 <!-- Header -->
@@ -39,5 +40,40 @@
   <div class="main" id="mainArea"></div>
 </div>
 
+<!-- Rel — embedded AI assistant docked bottom-right (see rel-panel.js) -->
+<button type="button" id="relLauncher" class="rel-launcher" title="Ask Rel — your AI workflow assistant" aria-label="Ask Rel">&#x1F43A;</button>
+<div id="relDock" class="rel-dock hidden">
+  <div class="rel-header">
+    <div class="rel-id">
+      <span class="rel-avatar">&#x1F43A;</span>
+      <div class="rel-names">
+        <span class="rel-title">RelliK Wolf-Krow</span>
+        <span class="rel-sub">call him &ldquo;Rel&rdquo;</span>
+      </div>
+    </div>
+    <div class="rel-header-right">
+      <select id="relProjectSelect" class="rel-project" title="Active project"></select>
+      <button type="button" id="relCloseBtn" class="rel-x" title="Close">&#x2715;</button>
+    </div>
+  </div>
+
+  <div id="relMessages" class="rel-messages"></div>
+
+  <div id="relStatusBar" class="rel-status" style="display:none">
+    <span class="rel-status-dot"></span>
+    <span id="relStatusText">Rel is thinking&hellip;</span>
+    <span id="relToolTicker" class="rel-tools"></span>
+  </div>
+
+  <div class="rel-input-row">
+    <textarea id="relInput" class="rel-input" rows="2" placeholder="Ask Rel anything about this project&hellip;"></textarea>
+    <div class="rel-input-btns">
+      <button type="button" id="relStopBtn" class="rel-btn stop" style="display:none" title="Stop">&#x23F9;</button>
+      <button type="button" id="relSendBtn" class="rel-btn primary" title="Send">&#x27A4;</button>
+    </div>
+  </div>
+</div>
+
 <script src="index.js"></script>
+<script src="rel-panel.js"></script>
 </body></html>

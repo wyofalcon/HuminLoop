@@ -1094,6 +1094,17 @@ body {
   transition: border-color var(--transition-fast);
 }
 .project-dialog .field-input:focus { border-color: var(--accent-blue); }
+.project-dialog .field-row { display: flex; gap: 6px; align-items: stretch; }
+.project-dialog .field-row .field-input { flex: 1; min-width: 0; }
+.project-dialog .repo-link-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.new-proj-ide { margin-bottom: 8px; }
+.new-proj-ide .ide-win-list { max-height: 148px; overflow-y: auto; }
+.ide-win-row.chosen { border-color: var(--accent-blue); background: #4f8ff722; }
 
 .color-picker {
   display: flex;
@@ -1777,7 +1788,8 @@ kbd {
 #huminloop-action-toast {
   position: fixed;
   bottom: 24px;
-  right: 24px;
+  /* Bottom-left: the bottom-right corner belongs to the Rel dock + launcher. */
+  left: 24px;
   max-width: 360px;
   background: var(--bg-card);
   color: var(--text);
@@ -1850,7 +1862,9 @@ kbd {
   bottom: 0;
   background: var(--bg-surface);
   border-top: 2px solid #f59e0b;
-  padding: 12px 16px;
+  /* Extra right padding keeps the left-packed action buttons clear of the
+     fixed Rel launcher bubble (bottom-right) at narrow window widths. */
+  padding: 12px 88px 12px 16px;
   display: flex;
   align-items: center;
   gap: 12px;

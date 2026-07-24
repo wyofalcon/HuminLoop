@@ -5,17 +5,17 @@
 ## Current State
 
 - **Branch:** master
-- **Last commit:** b067215 chore(release): v2.1.0 — demos + project tag filter
-- **Updated:** 2026-07-23T21:33:24Z
+- **Last commit:** f530fca feat(rel): in-app Claude Agent SDK assistant + Connect IDE wizard
+- **Updated:** 2026-07-24T09:41:53Z
 
 ## Recent Commits
 
 ```
+f530fca feat(rel): in-app Claude Agent SDK assistant + Connect IDE wizard
 b067215 chore(release): v2.1.0 — demos + project tag filter
 5438665 feat(demos): per-project screen recordings with AI narration
 2c91793 feat(viewer): project tag filter (Any/All + saved tag groups) + build task
 9f07760 fix(capture): open popup on the active monitor and raise it above other windows
-522f1c5 fix(scripts): make `npm run kill` work on Windows
 ```
 
 ## In Progress

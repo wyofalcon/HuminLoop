@@ -150,13 +150,13 @@ contextBridge.exposeInMainWorld('quickclip', {
   closeRecorder: () => ipcRenderer.send('close-recorder'),
   onDemoMarker: (cb) => ipcRenderer.on('demo-marker', () => cb()),
 
-  // Rel — in-app AI assistant (viewer side opens it; rel.html drives the chat)
+  // Rel — in-app AI assistant (embedded dock in the viewer; rel-panel.js drives the chat)
   openRel: (projectId) => ipcRenderer.send('open-rel', projectId),
-  closeRel: () => ipcRenderer.send('close-rel'),
   getRelContext: () => ipcRenderer.invoke('get-rel-context'),
   relSend: (projectId, text) => ipcRenderer.invoke('rel-send', { projectId, text }),
   relInterrupt: () => ipcRenderer.send('rel-interrupt'),
   onRelEvent: (cb) => ipcRenderer.on('rel-event', (_, event) => cb(event)),
+  onRelOpen: (cb) => ipcRenderer.on('rel-open', (_, data) => cb(data)),
 
   // Workspace auto-register
   onWorkspaceProposed: (cb) => ipcRenderer.on('workspace-proposed', (_, data) => cb(data)),
@@ -175,6 +175,7 @@ contextBridge.exposeInMainWorld('quickclip', {
 
   // IDE Setup
   detectIde: (repoPath) => ipcRenderer.invoke('detect-ide', repoPath),
+  pickDirectory: () => ipcRenderer.invoke('pick-directory'),
   generateMcpConfig: (projectId) => ipcRenderer.invoke('generate-mcp-config', projectId),
   writeMcpConfig: (projectId) => ipcRenderer.invoke('write-mcp-config', projectId),
 

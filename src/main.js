@@ -25,7 +25,6 @@ const media = require('./media');
 const workflowContext = require('./workflow-context');
 const { normalizeRepoPath, repoPathsEqual, canonicalRepoPath } = require('./repo-path');
 const rel = require('./rel');
-const { createAppWindow } = require('./window-factory');
 
 // ── Prompt ID Generation ──
 let batchLetter = 0; // 0=a, 1=b, etc. Resets on restart.
@@ -377,10 +376,13 @@ function activeCaptureWorkArea() {
   }
 }
 
-// Top-right corner (with a 20px inset) of the given work area for a window of
-// the given width, so the popup hugs the corner of the active monitor.
-function captureCornerPosition(area, width) {
-  return { x: area.x + area.width - (width + 20), y: area.y + 20 };
+// Corner of a work area (inset from the edge) for a window of the given size,
+// so popups hug the corner of the monitor the user is working on. Shared by
+// the capture popup + recorder (top-right) and the Rel dock (bottom-right).
+function cornerPosition(area, { width, height = 0, corner = 'top-right', inset = 20 }) {
+  const x = area.x + area.width - (width + inset);
+  const y = corner === 'bottom-right' ? area.y + area.height - (height + inset) : area.y + inset;
+  return { x, y };
 }
 
 // Forcefully raise the capture popup above other windows so it is never buried.
@@ -400,7 +402,7 @@ async function createCaptureWindow(imageDataURL, windowMeta = null) {
     // Reuse path: move the existing popup onto the monitor the user is on now,
     // then raise it. Without this it would stay wherever it last opened.
     const [w] = captureWindow.getSize();
-    const { x, y } = captureCornerPosition(activeCaptureWorkArea(), w);
+    const { x, y } = cornerPosition(activeCaptureWorkArea(), { width: w });
     captureWindow.setPosition(x, y);
     raiseCaptureWindow();
     captureWindow.webContents.send('new-screenshot', imageDataURL, windowMeta);
@@ -409,7 +411,7 @@ async function createCaptureWindow(imageDataURL, windowMeta = null) {
   const mode = await getAppMode();
   const htmlFile = mode === 'focused' ? 'focused-capture.html' : 'capture.html';
   const captureSize = mode === 'focused' ? { width: 340, height: 420 } : { width: 460, height: 580 };
-  const { x, y } = captureCornerPosition(activeCaptureWorkArea(), captureSize.width);
+  const { x, y } = cornerPosition(activeCaptureWorkArea(), { width: captureSize.width });
   captureWindow = new BrowserWindow({
     width: captureSize.width, height: captureSize.height,
     x, y,
@@ -818,10 +820,10 @@ function createRecorderWindow() {
   }
   const area = activeCaptureWorkArea();
   const width = 460, height = 600;
+  const { x, y } = cornerPosition(area, { width, inset: 40 });
   recorderWindow = new BrowserWindow({
     width, height,
-    x: area.x + area.width - (width + 40),
-    y: area.y + 40,
+    x, y,
     minWidth: 360, minHeight: 420,
     title: 'HuminLoop — Record Demo',
     frame: false,
@@ -873,67 +875,45 @@ ipcMain.handle('get-recorder-context', async () => {
   return { projectId: projectId || null, projects, markerHotkey: MARKER_HOTKEY, aiEnabled: ai.isEnabled() };
 });
 
-// ── Rel (RelliK Wolf-Krow) — in-app AI assistant window ──
+// ── Rel (RelliK Wolf-Krow) — in-app AI assistant, embedded in the viewer ──
+//
+// Rel is a chat panel docked in the bottom-right of the main window (see
+// renderer/rel-panel.js) — not a separate BrowserWindow. Opening it just means
+// showing the viewer and pushing a 'rel-open' event so the renderer reveals the
+// dock; streaming turn events go to the viewer's own webContents.
 
-let relWindow = null;
-let _pendingRelProject = null;
-
-function createRelWindow(projectId) {
-  if (projectId != null) _pendingRelProject = projectId;
-  if (relWindow && !relWindow.isDestroyed()) {
-    relWindow.show();
-    relWindow.focus();
-    if (projectId != null) relWindow.webContents.send('rel-event', { kind: 'project-changed', projectId });
-    return;
-  }
-  const width = 720, height = 640;
-  // Center over the main window when it's visible; otherwise center on the
-  // active display so tray-launched chats land where the user is working.
-  let x, y;
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-    const b = mainWindow.getBounds();
-    x = Math.round(b.x + (b.width - width) / 2);
-    y = Math.round(b.y + (b.height - height) / 2);
-  } else {
-    const area = activeCaptureWorkArea();
-    x = Math.round(area.x + (area.width - width) / 2);
-    y = Math.round(area.y + (area.height - height) / 2);
-  }
-  relWindow = createAppWindow({
-    file: 'rel.html',
-    width, height, x, y,
-    minWidth: 420, minHeight: 380,
-    title: 'HuminLoop — Rel',
-    frame: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: true,
-  });
-  relWindow.setAlwaysOnTop(true, 'floating');
-  relWindow.on('closed', () => { relWindow = null; });
+function openRelDock(projectId) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send('rel-open', { projectId: projectId != null ? projectId : null });
 }
 
 function sendRelEvent(event) {
-  if (relWindow && !relWindow.isDestroyed()) relWindow.webContents.send('rel-event', event);
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('rel-event', event);
 }
 
 ipcMain.on('open-rel', (_, projectId) => {
-  createRelWindow(projectId != null ? projectId : null);
-});
-
-ipcMain.on('close-rel', () => {
-  if (relWindow && !relWindow.isDestroyed()) relWindow.close();
+  openRelDock(projectId != null ? projectId : null);
 });
 
 ipcMain.handle('get-rel-context', async () => {
-  const projects = await db.getProjects();
-  let projectId = _pendingRelProject;
-  if (!projectId) {
-    const mode = await getAppMode();
-    if (mode === 'focused') projectId = await db.getSettings('focused_active_project');
+  // Never reject: the dock reveals itself before awaiting this, so a throw here
+  // would leave an empty panel that (with the renderer's init retry) can recover
+  // on reopen, but safe defaults keep the panel usable immediately.
+  try {
+    const projects = await db.getProjects();
+    // In focused mode, default the dock to the active focused project so Rel
+    // starts with the right repo context even when opened without an explicit id.
+    let defaultProjectId = null;
+    if ((await getAppMode()) === 'focused') defaultProjectId = (await db.getSettings('focused_active_project')) || null;
+    const relConfig = await rel.getConfig();
+    return { projects, defaultProjectId, relConfig, status: rel.getStatus() };
+  } catch (e) {
+    console.error('[Rel] get-rel-context failed:', e.message);
+    return { projects: [], defaultProjectId: null, relConfig: null, status: null };
   }
-  const relConfig = await rel.getConfig();
-  return { projectId: projectId || null, projects, relConfig, status: rel.getStatus() };
 });
 
 ipcMain.handle('rel-send', async (_, { projectId, text }) => {
@@ -1221,7 +1201,7 @@ async function rebuildTrayMenu() {
     { label: 'Quick Capture', click: async () => await createCaptureWindow(null) },
     { label: 'Show Toolbar', click: () => createToolbarWindow() },
     { label: 'Record Demo', click: () => { _pendingRecorderProject = null; createRecorderWindow(); } },
-    { label: 'Ask Rel', click: () => { _pendingRelProject = null; createRelWindow(); } },
+    { label: 'Ask Rel', click: () => openRelDock(null) },
     { type: 'separator' },
     { label: modeLabel, click: async () => {
       const current = await getAppMode();
@@ -1583,6 +1563,15 @@ ipcMain.handle('save-categories', async (_, cats) => {
 
 ipcMain.handle('get-projects', () => db.getProjects());
 ipcMain.handle('get-project', (_, id) => db.getProject(id));
+
+// Native directory picker for the project dialogs' Repo Path field.
+ipcMain.handle('pick-directory', async () => {
+  const opts = { title: 'Choose project repo folder', properties: ['openDirectory'] };
+  const result = (mainWindow && !mainWindow.isDestroyed())
+    ? await dialog.showOpenDialog(mainWindow, opts)
+    : await dialog.showOpenDialog(opts);
+  return result.canceled ? null : (result.filePaths[0] || null);
+});
 
 // Normalize repo_path: strip quotes from "Copy as Path", strip .code-workspace filename
 ipcMain.handle('create-project', async (_, data) => {

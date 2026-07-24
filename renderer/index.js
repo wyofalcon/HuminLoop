@@ -2341,12 +2341,20 @@ function showNewProjectDialog() {
   dialog.className = 'project-dialog';
   dialog.innerHTML = `
     <h3>New Project</h3>
+    <div id="newProjIdeSection" class="new-proj-ide hidden">
+      <label class="field-label">Open in your editor <span class="field-hint">— pick one to start from</span></label>
+      <div id="newProjIdeList" class="ide-win-list"></div>
+    </div>
     <label class="field-label">Name</label>
     <input id="projName" class="field-input" placeholder="e.g. Cvstomize" onkeydown="if(event.key==='Enter')saveNewProject()" />
     <label class="field-label">Description</label>
     <input id="projDesc" class="field-input" placeholder="What is this project about?" />
     <label class="field-label">Repo Path <span class="field-hint">— optional, for auto-detect</span></label>
-    <input id="projRepo" class="field-input" placeholder="C:\\Users\\..." />
+    <div class="field-row">
+      <input id="projRepo" class="field-input" placeholder="C:\\Users\\..." oninput="updateRepoLinkHint('projRepo')" />
+      <button class="cap-btn small" onclick="browseRepoPath('projRepo')">Browse…</button>
+    </div>
+    <div id="projRepoHint" class="repo-link-hint hidden">No repo path handy? Leave it blank — when you open the repo in your IDE with the HuminLoop MCP server set up, the app will offer to link it to this project.</div>
     <label class="field-label">Color</label>
     <div class="color-picker">
       <button class="color-dot active" style="background:#3b82f6" onclick="pickColor(this,'#3b82f6')"></button>
@@ -2391,6 +2399,44 @@ function showNewProjectDialog() {
   `;
   el.prepend(dialog);
   document.getElementById('projName').focus();
+  loadNewProjectIdeWindows();
+}
+
+// Populate the New Project dialog with the editor windows the user has open, so
+// a project can be started straight from one instead of typing everything.
+// Titles only carry the folder *name* (no absolute path — see window-info.js),
+// so picking one fills the name + marks it a Developer Project; the exact repo
+// path comes from Browse or the auto-link-on-connect flow.
+let _newProjIdeWindows = [];
+async function loadNewProjectIdeWindows() {
+  let wins = [];
+  try { wins = await window.quickclip.listIdeWindows(); } catch {}
+  const section = document.getElementById('newProjIdeSection');
+  const list = document.getElementById('newProjIdeList');
+  if (!section || !list) return; // dialog was closed while scanning
+  _newProjIdeWindows = wins || [];
+  if (!_newProjIdeWindows.length) { section.classList.add('hidden'); return; }
+  list.innerHTML = _newProjIdeWindows.map((w, i) => `
+    <button type="button" class="ide-win-row" onclick="pickIdeWindowForNewProject(${i})" title="${escAttr(w.title)}">
+      <span class="ide-win-folder">&#x1F4C1; ${esc(w.folder)}${w.remote ? ` <span class="ide-win-remote">${esc(w.remote)}</span>` : ''}</span>
+      <span class="ide-win-title">${esc(w.title)}</span>
+    </button>`).join('');
+  section.classList.remove('hidden');
+}
+
+function pickIdeWindowForNewProject(index) {
+  const w = _newProjIdeWindows[index];
+  if (!w) return;
+  const nameEl = document.getElementById('projName');
+  if (nameEl && !nameEl.value.trim()) nameEl.value = w.folder;
+  const devToggle = document.getElementById('projDevToggle');
+  if (devToggle && !devToggle.checked) { devToggle.checked = true; toggleDevProject(true); }
+  const ideSel = document.getElementById('projIde');
+  if (ideSel && !ideSel.value) ideSel.value = 'VS Code';
+  updateRepoLinkHint('projRepo');
+  document.querySelectorAll('#newProjIdeList .ide-win-row').forEach((r, i) => r.classList.toggle('chosen', i === index));
+  const repoEl = document.getElementById('projRepo');
+  if (repoEl) repoEl.focus();
 }
 
 let newProjectColor = '#3b82f6';
@@ -2398,6 +2444,25 @@ let newProjectColor = '#3b82f6';
 function toggleDevProject(checked, targetId) {
   const ideField = document.getElementById(targetId || 'ideField');
   if (ideField) ideField.classList.toggle('hidden', !checked);
+  updateRepoLinkHint(targetId === 'editIdeField' ? 'editProjRepo' : 'projRepo');
+}
+
+// Developer Project on + repo path blank → surface the workspace-proposal flow
+// (the path gets linked automatically when the IDE's MCP server sees the repo).
+function updateRepoLinkHint(repoId) {
+  const repo = document.getElementById(repoId);
+  const hint = document.getElementById(repoId + 'Hint');
+  if (!repo || !hint) return;
+  const devToggle = document.getElementById(repoId === 'editProjRepo' ? 'editProjDevToggle' : 'projDevToggle');
+  hint.classList.toggle('hidden', !(devToggle?.checked && !repo.value.trim()));
+}
+
+async function browseRepoPath(inputId) {
+  const path = await window.quickclip.pickDirectory();
+  if (!path) return;
+  const input = document.getElementById(inputId);
+  if (input) input.value = path;
+  updateRepoLinkHint(inputId);
 }
 
 function pickColor(btn, color) {
@@ -2443,7 +2508,11 @@ function editProject(id) {
     <label class="field-label">Description</label>
     <input id="editProjDesc" class="field-input" value="${escAttr(proj.description)}" />
     <label class="field-label">Repo Path</label>
-    <input id="editProjRepo" class="field-input" value="${escAttr(proj.repo_path || '')}" />
+    <div class="field-row">
+      <input id="editProjRepo" class="field-input" value="${escAttr(proj.repo_path || '')}" oninput="updateRepoLinkHint('editProjRepo')" />
+      <button class="cap-btn small" onclick="browseRepoPath('editProjRepo')">Browse…</button>
+    </div>
+    <div id="editProjRepoHint" class="repo-link-hint ${proj.ide && !proj.repo_path ? '' : 'hidden'}">No repo path handy? Leave it blank — when you open the repo in your IDE with the HuminLoop MCP server set up, the app will offer to link it to this project.</div>
     <label class="field-label">Color</label>
     <div class="color-picker">
       ${['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#ec4899','#06b6d4','#84cc16'].map((c) =>
@@ -3535,6 +3604,22 @@ async function startIdeCheck() {
   const proj = projects.find((p) => p.id === st.projectId);
   try { st.ideStatus = await window.quickclip.detectIde(proj?.repo_path); } catch { st.ideStatus = null; }
   if (_ideConnect !== st || st.step !== 'check') return;
+
+  // Auto-configure the MCP bridge so the user never has to hand-edit mcp.json.
+  // Requires a repo_path (the write handler throws without one); runs once per
+  // connect, then re-detects so the checklist flips to a green check.
+  if (proj?.repo_path && st.ideStatus && !st.ideStatus.mcpConfigured && !st.autoMcpTried) {
+    st.autoMcpTried = true;
+    try {
+      await window.quickclip.writeMcpConfig(st.projectId);
+      showToast(`\u{1F50C} MCP configured for ${proj.name}`);
+      st.ideStatus = await window.quickclip.detectIde(proj.repo_path);
+    } catch (e) {
+      showToast(`Couldn't auto-configure MCP: ${e.message}`);
+    }
+    if (_ideConnect !== st || st.step !== 'check') return;
+  }
+
   renderIdeConnectOverlay();
   // Poll until the MCP heartbeat flips active_in_ide (set by api-server, not by us).
   if (!st.poll) {
@@ -3629,7 +3714,7 @@ function renderIdeConnectOverlay() {
         <div class="ide-check-row">&#x1F4E1; Waiting for MCP heartbeat&hellip; <span class="ide-win-title">(reload the VS Code window / start your AI agent so the MCP server connects)</span></div>
       </div>`;
     if (s && !s.mcpConfigured && proj.repo_path) {
-      body += `<p class="ide-connect-hint">The MCP bridge isn't set up yet &mdash; want HuminLoop to configure it?</p>`;
+      body += `<p class="ide-connect-hint">${st.autoMcpTried ? "Automatic MCP setup didn't stick &mdash; set it up manually:" : 'Setting up the MCP bridge&hellip;'}</p>`;
     }
     body += ideConnectPinSuggestion(proj);
     body += `<div class="mcp-setup-actions">
@@ -3644,7 +3729,7 @@ function renderIdeConnectOverlay() {
       <p class="ide-connect-hint">&#x1F43A; <strong>Meet Rel</strong> &mdash; your AI workflow assistant. He can look over this repo, answer questions, and help set up your workflow.</p>`;
     body += ideConnectPinSuggestion(proj);
     body += `<div class="mcp-setup-actions">
-      <button class="btn-primary" onclick="closeIdeConnect();renderAll();window.quickclip.openRel(${proj.id})">&#x1F43A; Meet Rel</button>
+      <button class="btn-primary" onclick="closeIdeConnect();renderAll();window.openRelDock ? window.openRelDock(${proj.id}) : window.quickclip.openRel(${proj.id})">&#x1F43A; Meet Rel</button>
       <button class="btn-secondary" onclick="closeIdeConnect();renderAll()">Done</button>
     </div>`;
   }
@@ -3654,10 +3739,13 @@ function renderIdeConnectOverlay() {
 
 // ── Rel (in-app AI assistant) ──
 
-// Header-button entry: open Rel with the currently selected project (if any)
-// so he starts with the right repo context.
+// Header-button entry: open the embedded Rel dock with the currently selected
+// project (if any) so he starts with the right repo context. Falls back to the
+// IPC open path if the panel script somehow hasn't loaded.
 function openRelChat() {
-  window.quickclip.openRel(selectedProjectId || null);
+  const pid = selectedProjectId || null;
+  if (window.openRelDock) window.openRelDock(pid);
+  else window.quickclip.openRel(pid);
 }
 
 // ── Workspaces Quick Launch ──

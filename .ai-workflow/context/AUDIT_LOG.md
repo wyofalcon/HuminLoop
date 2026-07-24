@@ -1,5 +1,13 @@
 # Pre-Feature Audit Log
 
+## 2026-07-24 — Rel Bottom-Right Dock Widget + Repo Path Browse/Hint
+
+- Corner-position math was duplicated 3× in main.js: `captureCornerPosition` (top-right, 20px inset), the recorder window's inline copy (top-right, 40px), and the new Rel dock (bottom-right, 20px) — consolidated into a single `cornerPosition(area, { width, height, corner, inset })` helper used by all three.
+- Display selection is inconsistent across windows: capture/recorder/Rel-fallback follow the cursor (`activeCaptureWorkArea`), main-window maximize + Rel-when-viewer-visible use `getDisplayMatching(mainWindow.getBounds())`, but the **toolbar (main.js:441) and overlay (main.js:528) hardcode `getPrimaryDisplay()`** — on multi-monitor setups they always appear on the primary display. Pre-existing bug, out of scope this round; recommend switching both to `activeCaptureWorkArea()`.
+- Position persistence exists only for the toolbar (`toolbar_position` setting); Rel needs none now that it is docked (`movable: false`).
+- Rel window had no dead IPC or leftover experiment code; the old centered-positioning branch was fully replaced by the dock logic, and the now-unused `.drag`/`.nd` CSS utilities were removed from rel.css/rel.html.
+- Recommendation (applied): one shared corner helper instead of a third copy; (deferred): fix toolbar/overlay primary-display hardcoding, unify display-selection strategy.
+
 ## 2026-07-24 — Rel AI Assistant (chat window + Agent SDK) + MCP Server Fixes
 
 - IPC handlers (`send-to-ide`, `combine-and-send-to-ide`, `summarize-project`, `combine-clips-prompt`) duplicate HTTP API endpoint logic line-for-line (main.js:1648-1769 vs api-server.js:246/542/573/590) — not consolidated this round (out of scope), flagged for a future shared module (`src/send-to-ide.js`, `src/ai-prompts.js`)
@@ -331,3 +339,11 @@ No blocking issues. Feature can reuse existing project creation, settings storag
 - Existing focused-mode IDE plumbing (`detect-ide`, `generate-mcp-config`, `write-mcp-config`, `showMcpSetup()`) is reusable as-is for the full-mode connect wizard — no duplication needed.
 - Workspace proposals: reuse `proposeWorkspace()`/`register-workspace` patterns rather than new registration paths; quick-launch pins are plain settings (`workspace_quick_launch`), no schema change.
 - No dead code found in touched areas; `sanitizeUpdates` twin-allowlist pattern is intentional.
+
+## 2026-07-24 — Rel dock + auto-MCP on Connect + New Project window picker
+
+- **F1 auto-MCP:** `buildMcpServerEntry()` is DRY — `generate-mcp-config` and `write-mcp-config` both call it; no duplicate config-gen logic. Auto-write hooks cleanly into the wizard's `startIdeCheck()` after `detectIde`, guarded on `proj.repo_path` (the write handler throws without it). No new main-process code needed beyond calling the existing `write-mcp-config`.
+- **F2 Rel embed collisions:** `esc()` is defined in BOTH renderer/index.js:274 and rel.js:24 (also `renderMarkdownLite` etc.) → embedded panel wrapped in an IIFE (`rel-panel.js`) so none of its globals leak. rel.css styles bare `*`, `html`, `body` (rel.css:3-10) which would clobber the viewer → new `rel-dock.css` scopes everything under `.rel-dock`/`.rel-launcher` and reuses index.css theme vars. All dock element ids prefixed `rel*` (viewer already has `#statusBar`, `#sidebar`, etc.; no `rel`-prefixed ids exist).
+- **F2 dead code removed:** rel.html/rel.css/rel.js deleted; `createRelWindow`/`dockRelWindow`/`relDockPosition`/`relWindow`/`_relDockTimer`/`_pendingRelProject` + `close-rel` handler removed from main.js; `closeRel` dropped from preload. `createAppWindow` (window-factory.js) was Rel's only consumer → its import removed from main.js; the helper file kept as documented shared infra for future windows. `renderer/**/*` build glob means no electron-builder change for the file add/remove.
+- **F3 New Project picker:** `listIDEWindows()` returns `{title, folder, remote, processName}` — folder basename parsed from the window title, NO absolute path. So the picker prefills the project *name* + marks it a Developer Project; the exact repo_path still comes from Browse (native dir picker, added this session) or the leave-blank auto-link-on-MCP path. IDE-window row rendering reused from the Connect wizard (index.js:3619-3624).
+- Recommendation (applied): reused the interim `cornerPosition` refactor + `pick-directory`/Browse work already in the tree; converted the interim docked-*window* Rel into an in-viewer docked *panel* per the clarified intent.

@@ -5,6 +5,8 @@
 const { execSync, execFileSync, execFile, exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { normalizeRepoPath, canonicalRepoPath } = require('./repo-path');
 
 const NULLS = { title: null, processName: null, processPath: null };
 
@@ -256,9 +258,130 @@ function listXdotoolWindows() {
   });
 }
 
+// ── VS Code Open-Workspace Paths ──
+// Window titles only carry the workspace folder *name*. VS Code's storage.json
+// (User/globalStorage) records the windows it actually has open — windowsState
+// plus backupWorkspaces — with full folder URIs, so matching a title's folder
+// name against those entries recovers the absolute repo path. Plain JSON,
+// read-only; covers Linux-native installs and (under WSL) the Windows-host
+// install whose windows arrive via the powershell.exe interop.
+
+const VSCODE_VARIANTS = ['Code', 'Code - Insiders', 'VSCodium'];
+
+function vscodeStorageFiles() {
+  const files = [];
+  const add = (root) => files.push(path.join(root, 'User', 'globalStorage', 'storage.json'));
+  if (process.platform === 'win32' && process.env.APPDATA) {
+    for (const v of VSCODE_VARIANTS) add(path.join(process.env.APPDATA, v));
+  }
+  if (process.platform === 'linux') {
+    for (const v of VSCODE_VARIANTS) add(path.join(os.homedir(), '.config', v));
+    if (isWSL()) {
+      let users = [];
+      try { users = fs.readdirSync('/mnt/c/Users'); } catch {}
+      for (const u of users) {
+        for (const v of VSCODE_VARIANTS) add(path.join('/mnt/c/Users', u, 'AppData', 'Roaming', v));
+      }
+    }
+  }
+  return files;
+}
+
 /**
- * List open VS Code windows across every reachable display server.
- * Never rejects. @returns {Promise<Array<{title, folder, remote, processName}>>}
+ * Convert a VS Code workspace URI into a filesystem path usable by this
+ * process. Returns { path, wsl } (wsl = lowercase distro when the folder lives
+ * inside a WSL distro) or null for unreachable remotes (SSH, containers, vfs).
+ */
+function vscodeUriToPath(uri) {
+  if (typeof uri !== 'string') return null;
+  let m = uri.match(/^vscode-remote:\/\/([^/]+)(\/.*)$/);
+  if (m) {
+    const authority = decodeURIComponent(m[1]);
+    if (!/^wsl\+/i.test(authority)) return null;
+    return { path: decodeURIComponent(m[2]), wsl: authority.slice(4).toLowerCase() };
+  }
+  m = uri.match(/^file:\/\/([^/]*)(\/.*)$/);
+  if (!m) return null;
+  const p = decodeURIComponent(m[2]);
+  if (m[1]) {
+    // UNC authority (file://wsl.localhost/Distro/home/…) — fold to the Linux form.
+    if (!/^wsl\.localhost$|^wsl\$$/i.test(m[1])) return null;
+    const distro = (p.split('/')[1] || '').toLowerCase();
+    return distro ? { path: normalizeRepoPath('//' + m[1] + p), wsl: distro } : null;
+  }
+  const drive = p.match(/^\/([a-zA-Z]):(\/.*)?$/);
+  if (drive) {
+    if (process.platform === 'win32') return { path: (drive[1].toUpperCase() + ':' + (drive[2] || '/')).replace(/\//g, '\\'), wsl: null };
+    return { path: '/mnt/' + drive[1].toLowerCase() + (drive[2] || ''), wsl: null };
+  }
+  return { path: p, wsl: null };
+}
+
+/**
+ * Ordered path candidates from every reachable storage.json: current windows
+ * first (windowsState), then live backup registrations — backupWorkspaces is
+ * updated the moment a window opens, so it covers windows newer than the last
+ * windowsState flush. Deduped per (distro, canonical path).
+ */
+function collectVSCodePaths() {
+  const candidates = [];
+  const seen = new Set();
+  const push = (uri, remoteAuthority) => {
+    const conv = uri && vscodeUriToPath(uri);
+    if (!conv || !conv.path) return;
+    let wsl = conv.wsl;
+    if (!wsl && typeof remoteAuthority === 'string' && /^wsl\+/i.test(remoteAuthority)) {
+      wsl = decodeURIComponent(remoteAuthority).slice(4).toLowerCase();
+    }
+    const repo = normalizeRepoPath(conv.path); // also strips *.code-workspace files
+    if (!repo) return;
+    const key = (wsl || 'local') + '|' + canonicalRepoPath(repo);
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ path: repo, wsl });
+  };
+  for (const file of vscodeStorageFiles()) {
+    let data;
+    try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
+    const ws = data.windowsState || {};
+    for (const w of [ws.lastActiveWindow, ...(Array.isArray(ws.openedWindows) ? ws.openedWindows : [])]) {
+      if (w) push(w.folder || (w.workspaceIdentifier || {}).configURIPath, w.remoteAuthority);
+    }
+    const b = data.backupWorkspaces || {};
+    for (const f of (Array.isArray(b.folders) ? b.folders : [])) { if (f) push(f.folderUri, f.remoteAuthority); }
+    for (const w of (Array.isArray(b.workspaces) ? b.workspaces : [])) { if (w) push(w.configURIPath, w.remoteAuthority); }
+  }
+  return candidates;
+}
+
+/**
+ * Match one enumerated window to a candidate path by folder name. Local windows
+ * only match local paths; "WSL: <distro>" windows only match WSL paths (same
+ * distro preferred). First hit wins — candidates are ordered most-current-first.
+ * Extra same-name hits come back as alternates so the UI can flag ambiguity.
+ */
+function resolveWindowPath(win, candidates) {
+  if (!win || !win.folder) return null;
+  const wslLabel = win.remote ? win.remote.match(/^WSL:\s*(.+)$/i) : null;
+  if (win.remote && !wslLabel) return null; // SSH / container remote: no local path
+  const name = win.folder.toLowerCase();
+  let pool = candidates.filter((c) => {
+    const base = c.path.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() || '';
+    return base.toLowerCase() === name && (wslLabel ? !!c.wsl : !c.wsl);
+  });
+  if (wslLabel) {
+    const exact = pool.filter((c) => c.wsl === wslLabel[1].trim().toLowerCase());
+    if (exact.length) pool = exact;
+  }
+  if (!pool.length) return null;
+  return { path: pool[0].path, alternates: pool.slice(1).map((c) => c.path) };
+}
+
+/**
+ * List open VS Code windows across every reachable display server, each
+ * annotated with its absolute workspace path when VS Code's own state can
+ * resolve it (path + pathAlternates for same-name ambiguity). Never rejects.
+ * @returns {Promise<Array<{title, folder, remote, processName, path?, pathAlternates?}>>}
  */
 async function listIDEWindows() {
   const jobs = [];
@@ -269,11 +392,21 @@ async function listIDEWindows() {
   }
   const results = await Promise.all(jobs);
   const seen = new Set();
-  return results.flat().filter((w) => {
+  const wins = results.flat().filter((w) => {
     if (seen.has(w.title)) return false;
     seen.add(w.title);
     return true;
   });
+  let candidates = [];
+  try { candidates = collectVSCodePaths(); } catch {}
+  for (const w of wins) {
+    const hit = resolveWindowPath(w, candidates);
+    if (hit) {
+      w.path = hit.path;
+      if (hit.alternates.length) w.pathAlternates = hit.alternates;
+    }
+  }
+  return wins;
 }
 
 // ── Public API ──

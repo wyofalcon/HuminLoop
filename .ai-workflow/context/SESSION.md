@@ -5,17 +5,17 @@
 ## Current State
 
 - **Branch:** master
-- **Last commit:** f530fca feat(rel): in-app Claude Agent SDK assistant + Connect IDE wizard
-- **Updated:** 2026-07-24T09:41:53Z
+- **Last commit:** 5bc4d54 feat(rel): dock Rel in-app + auto-MCP on Connect IDE + New Project window picker
+- **Updated:** 2026-07-24T10:48:50Z
 
 ## Recent Commits
 
 ```
+5bc4d54 feat(rel): dock Rel in-app + auto-MCP on Connect IDE + New Project window picker
 f530fca feat(rel): in-app Claude Agent SDK assistant + Connect IDE wizard
 b067215 chore(release): v2.1.0 — demos + project tag filter
 5438665 feat(demos): per-project screen recordings with AI narration
 2c91793 feat(viewer): project tag filter (Any/All + saved tag groups) + build task
-9f07760 fix(capture): open popup on the active monitor and raise it above other windows
 ```
 
 ## In Progress

@@ -1,4 +1,4 @@
-// src/rel.js — Rel (RelliK Wolf-Krow) session manager.
+// src/rel.js — Rel (RelliK Krow-Wolf) session manager.
 //
 // Embeds the Claude Agent SDK in the main process to power the in-app
 // assistant. Auth comes from the user's Claude subscription login (`claude
@@ -63,7 +63,7 @@ function personaPrompt(project) {
     ? `The active HuminLoop project is "${project.name}" at ${project.repo_path || '(no repo path set)'}.`
     : 'No HuminLoop project is currently active; general questions only until one is connected.';
   return [
-    'You are RelliK Wolf-Krow — "Rel" for short — HuminLoop\'s in-app workflow assistant.',
+    'You are RelliK Krow-Wolf — "Rel" for short — HuminLoop\'s in-app workflow assistant.',
     'HuminLoop is an ADHD-friendly knowledge-capture app for developers; you live inside it as a chat window.',
     projectLine,
     'You have the huminloop MCP tools (clips, projects, demos, workflow state) and read/edit access to the repo you were opened for.',

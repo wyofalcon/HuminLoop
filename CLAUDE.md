@@ -131,7 +131,7 @@ Floating annotation toolbar + fullscreen transparent overlay for drawing on scre
 
 ### Rel — In-App AI Assistant
 
-"RelliK Wolf-Krow" (Rel) is HuminLoop's built-in AI chat assistant, powered by the **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`) embedded in the main process. Phase 1 (chat shell) is live; upcoming phases: repo/workflow audit on connect, manifest-driven Workflow tab, per-asset "Ask Rel" buttons.
+"RelliK Krow-Wolf" (Rel) is HuminLoop's built-in AI chat assistant, powered by the **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`) embedded in the main process. Phase 1 (chat shell) is live; upcoming phases: repo/workflow audit on connect, manifest-driven Workflow tab, per-asset "Ask Rel" buttons.
 
 - **Auth:** the user's Claude subscription login (`claude login` OAuth from `~/.claude/.credentials.json`) — no API key. Usage bills against subscription limits.
 - **`rel` module (`src/rel.js`):** wraps the SDK's `query()`. The SDK is ESM-only → lazy `import()` from CJS. Per-turn options: `cwd` = project repo_path, `executable: 'node'`, env stripped of `ELECTRON_RUN_AS_NODE`, `permissionMode: 'acceptEdits'` (edits apply automatically — user preference), tools Read/Glob/Grep/Edit/Write/WebSearch/WebFetch + `mcp__huminloop` (Bash off unless `rel.allowBash`). The huminloop MCP server is attached as a stdio server per turn, so Rel natively sees clips/projects/demos/workflow.
@@ -273,12 +273,12 @@ Data flows through IPC (`get-workflow-status`, `get-workflow-changelog`, `get-wo
 
 When a project isn't IN IDE, the project Workflow header shows "🔌 Connect IDE…" which opens a wizard (`openIdeConnect` in `renderer/index.js`):
 
-1. **Pick a window** — `wininfo.listIDEWindows()` enumerates open VS Code windows: Win32 EnumWindows via auto-generated `scripts/list-windows.ps1`, **WSL→Windows-host `powershell.exe` interop** (host VS Code windows are invisible to xdotool), and xdotool for Linux-native windows. Titles are parsed by `parseVSCodeWindowTitle()` (folder + `[WSL: …]` remote badge).
-2. **Verify** — IPC `connect-ide-window` compares the window's folder to the repo_path basename (via `normalizeRepoPath`); mismatch → friendly "this may not be the correct project/path" warning with connect-anyway.
+1. **Pick a window** — `wininfo.listIDEWindows()` enumerates open VS Code windows: Win32 EnumWindows via auto-generated `scripts/list-windows.ps1`, **WSL→Windows-host `powershell.exe` interop** (host VS Code windows are invisible to xdotool), and xdotool for Linux-native windows. Titles are parsed by `parseVSCodeWindowTitle()` (folder + `[WSL: …]` remote badge). Each window is then annotated with its **absolute workspace path** (`path`, plus `pathAlternates` on same-name ambiguity) by matching the folder name against VS Code's own open-window state — `storage.json` (`windowsState` + `backupWorkspaces`) from every reachable install (`~/.config/Code*`, and under WSL the Windows-host `/mnt/c/Users/*/AppData/Roaming/Code*`); URIs (`vscode-remote://wsl+…`, `file:///c%3A/…`) are converted to paths usable by this process, local windows only match local paths and WSL windows only their distro's paths.
+2. **Verify** — IPC `connect-ide-window` compares the window's folder to the repo_path basename and, when the window resolved to an absolute path, the full paths via `repoPathsEqual`; mismatch → friendly "this may not be the correct project/path" warning with connect-anyway. **If the project has no repo_path but the window resolved to one**, the wizard offers a "Link & Connect" step (`candidatePath`) that sets the project's repo_path via `update-project` and proceeds — dissolving the old chicken-and-egg where auto-MCP setup needed a repo_path that only MCP could auto-link.
 3. **Check IDE + MCP** — reuses `detect-ide` (VS Code CLI / Claude Code extension / mcp.json). `startIdeCheck()` then **auto-writes the MCP config** (`write-mcp-config` → `.vscode/mcp.json` + `.mcp.json`, repo path baked into the server entry's env) when the project has a `repo_path` and MCP isn't already configured — the user no longer hand-edits mcp.json or clicks "Apply" (a toast confirms; `showMcpSetup()` remains only as a manual fallback if the auto-write fails, gated on `st.autoMcpTried`). Then polls until the MCP heartbeat flips `active_in_ide`. **The wizard never sets `active_in_ide` itself** — the api-server heartbeat system owns that flag.
 4. **Suggest a workspace pin** on success.
 
-**New Project picker:** `showNewProjectDialog()` lists the user's currently-open editor windows (same `listIDEWindows()` enumeration) at the top; picking one (`pickIdeWindowForNewProject`) prefills the project name from the window's folder and marks it a Developer Project. Window titles carry only the folder *name*, not an absolute path, so the exact `repo_path` still comes from the native **Browse…** picker (`pick-directory` IPC) or the leave-blank auto-link-on-connect flow.
+**New Project picker:** `showNewProjectDialog()` lists the user's currently-open editor windows (same `listIDEWindows()` enumeration) at the top; picking one (`pickIdeWindowForNewProject`) prefills the project name from the window's folder, marks it a Developer Project, and — when the window carries a resolved `path` — prefills the repo path too (with a toast warning on `pathAlternates` ambiguity). The native **Browse…** picker (`pick-directory` IPC) and the leave-blank auto-link-on-connect flow remain the fallbacks when resolution fails.
 
 **Workspaces quick launch:** sidebar section (below Trash in both the General Notes and Projects sidebars) listing pinned projects; click runs IPC `open-project-workspace` → `code <repo_path>` (exit-code-checked; VS Code's terminal-only remote-cli shim failing is reported, not swallowed). Pins live in settings key `workspace_quick_launch` (array of project ids), toggled via the ★ Workspace header button or the wizard.
 
@@ -372,7 +372,7 @@ Use these labels when discussing parts of the system. They are the canonical sho
 | `db-sqlite` | SQLite backend | `src/db-sqlite.js` |
 | `ai` | Gemini AI module | `src/ai.js` |
 | `rules` | Categorization engine | `src/rules.js` |
-| `wininfo` | Window metadata capture | `src/window-info.js` |
+| `wininfo` | Window metadata capture + VS Code window/path enumeration | `src/window-info.js` |
 | `images` | Disk image storage | `src/images.js` |
 | `repo-path` | repo_path normalization + comparison | `src/repo-path.js` |
 | `media` | Disk demo video/audio storage + streaming writers + PCM→WAV | `src/media.js` |

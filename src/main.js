@@ -875,7 +875,7 @@ ipcMain.handle('get-recorder-context', async () => {
   return { projectId: projectId || null, projects, markerHotkey: MARKER_HOTKEY, aiEnabled: ai.isEnabled() };
 });
 
-// ── Rel (RelliK Wolf-Krow) — in-app AI assistant, embedded in the viewer ──
+// ── Rel (RelliK Krow-Wolf) — in-app AI assistant, embedded in the viewer ──
 //
 // Rel is a chat panel docked in the bottom-right of the main window (see
 // renderer/rel-panel.js) — not a separate BrowserWindow. Opening it just means
@@ -2495,15 +2495,22 @@ ipcMain.handle('connect-ide-window', async (_, projectId, win) => {
   const project = await db.getProject(projectId);
   if (!project) return { error: 'Project not found' };
   const folder = win && win.folder ? String(win.folder) : null;
+  // Absolute path resolved from VS Code's own storage.json (see window-info.js)
+  const winPath = win && win.path ? normalizeRepoPath(String(win.path)) : null;
   let repoBase = null;
   let match = 'unknown'; // no repo_path (or no folder in the title) → can't verify
-  if (project.repo_path && folder) {
+  let candidatePath = null;
+  if (project.repo_path && (folder || winPath)) {
     const norm = normalizeRepoPath(project.repo_path).replace(/\\/g, '/').replace(/\/+$/, '');
     repoBase = norm.split('/').pop() || null;
-    if (repoBase) match = folder.toLowerCase() === repoBase.toLowerCase() ? 'yes' : 'no';
+    const baseYes = !!(folder && repoBase && folder.toLowerCase() === repoBase.toLowerCase());
+    const pathYes = !!(winPath && repoPathsEqual(project.repo_path, winPath));
+    match = baseYes || pathYes ? 'yes' : 'no';
+  } else if (!project.repo_path && winPath) {
+    candidatePath = winPath; // project has no repo_path — offer to link this one
   }
-  await addAuditEntry('ide.window-connect', { name: project.name, window: (win && win.title) || folder, match });
-  return { match, folder, repoBase, hasRepoPath: !!project.repo_path };
+  await addAuditEntry('ide.window-connect', { name: project.name, window: (win && win.title) || folder, match, candidatePath });
+  return { match, folder, repoBase, hasRepoPath: !!project.repo_path, candidatePath };
 });
 
 ipcMain.handle('open-project-workspace', async (_, projectId) => {

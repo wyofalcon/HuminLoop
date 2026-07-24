@@ -2404,9 +2404,10 @@ function showNewProjectDialog() {
 
 // Populate the New Project dialog with the editor windows the user has open, so
 // a project can be started straight from one instead of typing everything.
-// Titles only carry the folder *name* (no absolute path — see window-info.js),
-// so picking one fills the name + marks it a Developer Project; the exact repo
-// path comes from Browse or the auto-link-on-connect flow.
+// Titles only carry the folder *name*; window-info.js resolves the absolute
+// path from VS Code's own open-window state (w.path) when it can, so picking a
+// window also prefills the repo path. Browse and the auto-link-on-connect flow
+// remain the fallbacks when resolution fails.
 let _newProjIdeWindows = [];
 async function loadNewProjectIdeWindows() {
   let wins = [];
@@ -2419,7 +2420,7 @@ async function loadNewProjectIdeWindows() {
   list.innerHTML = _newProjIdeWindows.map((w, i) => `
     <button type="button" class="ide-win-row" onclick="pickIdeWindowForNewProject(${i})" title="${escAttr(w.title)}">
       <span class="ide-win-folder">&#x1F4C1; ${esc(w.folder)}${w.remote ? ` <span class="ide-win-remote">${esc(w.remote)}</span>` : ''}</span>
-      <span class="ide-win-title">${esc(w.title)}</span>
+      <span class="ide-win-title">${esc(w.path || w.title)}</span>
     </button>`).join('');
   section.classList.remove('hidden');
 }
@@ -2433,9 +2434,13 @@ function pickIdeWindowForNewProject(index) {
   if (devToggle && !devToggle.checked) { devToggle.checked = true; toggleDevProject(true); }
   const ideSel = document.getElementById('projIde');
   if (ideSel && !ideSel.value) ideSel.value = 'VS Code';
+  const repoEl = document.getElementById('projRepo');
+  if (repoEl && w.path && !repoEl.value.trim()) {
+    repoEl.value = w.path;
+    if (w.pathAlternates?.length) showToast('⚠️ More than one open folder is named "' + w.folder + '" — double-check the repo path');
+  }
   updateRepoLinkHint('projRepo');
   document.querySelectorAll('#newProjIdeList .ide-win-row').forEach((r, i) => r.classList.toggle('chosen', i === index));
-  const repoEl = document.getElementById('projRepo');
   if (repoEl) repoEl.focus();
 }
 
@@ -3593,7 +3598,27 @@ async function chooseIdeWindow(index) {
   if (verdict && verdict.error) { showToast(verdict.error); return; }
   st.verdict = verdict;
   if (verdict.match === 'yes') startIdeCheck();
+  else if (verdict.candidatePath) { st.step = 'link'; renderIdeConnectOverlay(); }
   else { st.step = 'warn'; renderIdeConnectOverlay(); }
+}
+
+// The project has no repo_path but VS Code's state resolved the chosen window
+// to one — set it (update-project normalizes + invalidates caches), then head
+// straight into the MCP check, which can now auto-write the config.
+async function linkIdeWindowPath() {
+  const st = _ideConnect;
+  const candidate = st?.verdict?.candidatePath;
+  if (!candidate) return;
+  try {
+    await window.quickclip.updateProject(st.projectId, { repo_path: candidate });
+    projects = await window.quickclip.getProjects();
+  } catch (e) {
+    showToast('Could not set repo path: ' + e.message);
+    return;
+  }
+  if (_ideConnect !== st) return;
+  showToast('🔗 Repo path linked');
+  startIdeCheck();
 }
 
 async function startIdeCheck() {
@@ -3677,7 +3702,7 @@ function renderIdeConnectOverlay() {
         const likely = repoBase && w.folder && w.folder.toLowerCase() === repoBase.toLowerCase();
         body += `<button class="ide-win-row ${likely ? 'likely' : ''}" onclick="chooseIdeWindow(${i})" title="${escAttr(w.title)}">
           <span class="ide-win-folder">&#x1F4C1; ${esc(w.folder)}${w.remote ? ` <span class="ide-win-remote">${esc(w.remote)}</span>` : ''}${likely ? ' <span class="ide-win-likely">likely match</span>' : ''}</span>
-          <span class="ide-win-title">${esc(w.title)}</span>
+          <span class="ide-win-title">${esc(w.path || w.title)}</span>
         </button>`;
       });
       body += '</div>';
@@ -3702,6 +3727,19 @@ function renderIdeConnectOverlay() {
       <button class="btn-secondary" onclick="_ideConnect.step='pick';renderIdeConnectOverlay()">Pick another window</button>
       <button class="btn-secondary" onclick="closeIdeConnect()">Cancel</button>
     </div>`;
+
+  } else if (st.step === 'link') {
+    const v = st.verdict || {};
+    body = `<h3>Link repo path?</h3>
+      <p class="ide-connect-hint"><strong>${esc(proj.name || 'This project')}</strong> has no repo path yet.
+        VS Code says that window has <code>${esc(v.candidatePath || '')}</code> open.</p>
+      ${st.chosen?.pathAlternates?.length ? `<p class="ide-connect-warn">&#x26A0;&#xFE0F; More than one open folder is named <strong>${esc(v.folder || '')}</strong> — make sure this is the right one${st.chosen.pathAlternates.length === 1 ? ` (the other is <code>${esc(st.chosen.pathAlternates[0])}</code>)` : ''}.</p>` : ''}
+      <p class="ide-connect-hint">Linking it lets HuminLoop verify the window, set up the MCP bridge automatically, and route prompts to this workspace.</p>
+      <div class="mcp-setup-actions">
+        <button class="btn-primary" onclick="linkIdeWindowPath()">&#x1F517; Link &amp; Connect</button>
+        <button class="btn-secondary" onclick="_ideConnect.step='pick';renderIdeConnectOverlay()">Pick another window</button>
+        <button class="btn-secondary" onclick="closeIdeConnect()">Cancel</button>
+      </div>`;
 
   } else if (st.step === 'check') {
     const s = st.ideStatus;
